@@ -1,0 +1,166 @@
+name: build-openwrt-apk
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Target architecture"
+        type: choice
+        options: [all, x86_64, aarch64_cortex-a53]
+        default: all
+      apply_slim:
+        description: "Apply podkop_slim patch (drops snell and api CLI to save ~6 MB)"
+        type: boolean
+        default: true
+      release:
+        description: "Publish to GitHub Release"
+        type: boolean
+        default: true
+      tag_name:
+        description: "Release tag name (leave blank to auto-detect from upstream.version)"
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          TARGET="${{ github.event.inputs.target || 'all' }}"
+          if [ "$TARGET" = "x86_64" ]; then
+            echo 'matrix={"include":[{"architecture":"x86_64","goarch":"amd64"}]}' >> "$GITHUB_OUTPUT"
+          elif [ "$TARGET" = "aarch64_cortex-a53" ]; then
+            echo 'matrix={"include":[{"architecture":"aarch64_cortex-a53","goarch":"arm64"}]}' >> "$GITHUB_OUTPUT"
+          else
+            echo 'matrix={"include":[{"architecture":"x86_64","goarch":"amd64"},{"architecture":"aarch64_cortex-a53","goarch":"arm64"}]}' >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: matrix
+    name: build ${{ matrix.architecture }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix.outputs.matrix) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Resolve toolchain and version
+        id: vars
+        run: |
+          GO_PIN="$(tr -d '[:space:]' < go.version | sed 's/^go//')"
+          echo "go_version=${GO_PIN}" >> "$GITHUB_OUTPUT"
+
+          UPSTREAM_VER="$(tr -d '[:space:]' < upstream.version)"
+          BUILD_TAG="${{ github.event.inputs.tag_name }}"
+          if [ -z "$BUILD_TAG" ]; then
+            BUILD_TAG="v${UPSTREAM_VER}-lx.5"
+          fi
+          echo "tag=${BUILD_TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${BUILD_TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.vars.outputs.go_version }}
+
+      - name: Apply podkop_slim patch
+        if: ${{ inputs.apply_slim }}
+        run: |
+          echo "Applying podkop_slim patch..."
+          git apply patches/0001-podkop-slim.patch
+          rm -f cmd/sing-box/cmd_api*.go
+
+      - name: Build binary (${{ matrix.goarch }})
+        run: |
+          TAGS="with_quic,with_utls,with_clash_api,with_xhttp,badlinkname,tfogo_checklinkname0"
+          if [ "${{ inputs.apply_slim }}" = "true" ]; then
+            TAGS="${TAGS},podkop_slim"
+          fi
+
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.goarch }} go build -v -trimpath \
+            -tags "$TAGS" \
+            -ldflags "-s -w -buildid= -checklinkname=0 -X 'github.com/sagernet/sing-box/constant.Version=${{ steps.vars.outputs.version }}'" \
+            -o dist/sing-box ./cmd/sing-box
+
+          echo "=== Binary size ==="
+          ls -lh dist/sing-box
+          file dist/sing-box
+
+      - name: Install apk-tools
+        run: |
+          docker run --rm -v /usr/local/bin:/mnt alpine:edge sh -c "apk add --no-cache apk-tools-static && cp /sbin/apk.static /mnt/apk && chmod +x /mnt/apk"
+          apk --version
+
+      - name: Package OpenWrt APK
+        run: |
+          chmod +x .github/build_podkop_apk.sh
+          .github/build_podkop_apk.sh \
+            "${{ matrix.architecture }}" \
+            "${{ steps.vars.outputs.version }}" \
+            "dist/sing-box" \
+            "dist/sing-box_${{ steps.vars.outputs.version }}_openwrt_${{ matrix.architecture }}.apk"
+
+          cd dist
+          sha256sum *.apk > SHA256SUMS
+          ls -lh
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sing-box_${{ steps.vars.outputs.version }}_openwrt_${{ matrix.architecture }}
+          path: dist/*
+
+  release:
+    needs: [matrix, build]
+    name: Publish Release
+    runs-on: ubuntu-latest
+    if: ${{ inputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve version
+        id: vars
+        run: |
+          UPSTREAM_VER="$(tr -d '[:space:]' < upstream.version)"
+          BUILD_TAG="${{ github.event.inputs.tag_name }}"
+          if [ -z "$BUILD_TAG" ]; then
+            BUILD_TAG="v${UPSTREAM_VER}-lx.5"
+          fi
+          echo "tag=${BUILD_TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${BUILD_TAG#v}" >> "$GITHUB_OUTPUT"
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-dist
+      - name: Prepare release files
+        run: |
+          mkdir -p release-files
+          find all-dist -type f -name '*.apk' -exec cp {} release-files/ \;
+          cd release-files
+          sha256sum *.apk > SHA256SUMS
+          ls -lh
+      - name: Publish Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.vars.outputs.tag }}"
+          cat > notes.md << 'EOF'
+          ### sing-box-lx for OpenWrt 25.12 (x86_64, aarch64_cortex-a53)
+          - **Features:** `with_quic,with_utls,with_clash_api,with_xhttp`
+          - **Podkop slim:** ${{ inputs.apply_slim }} (snell and api CLI stripped)
+          - **Uncompressed:** optimized for direct flash/squashfs execution without RAM blowup
+          EOF
+          gh release create "$TAG" release-files/* \
+            --title "sing-box-lx ${{ steps.vars.outputs.version }} for OpenWrt" \
+            --notes-file notes.md \
+            --target "$GITHUB_SHA" || gh release upload "$TAG" release-files/* --clobber
