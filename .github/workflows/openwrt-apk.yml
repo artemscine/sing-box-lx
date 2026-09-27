@@ -1,0 +1,118 @@
+name: build-openwrt-apk
+
+on:
+  workflow_dispatch:
+    inputs:
+      architecture:
+        description: "Target OpenWrt architecture"
+        default: "aarch64_cortex-a53"
+      apply_slim:
+        description: "Apply podkop_slim patch (drops snell and api CLI to save ~6 MB)"
+        type: boolean
+        default: true
+      release:
+        description: "Publish to GitHub Release"
+        type: boolean
+        default: true
+      tag_name:
+        description: "Release tag name (leave blank to auto-detect from upstream.version)"
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ inputs.architecture }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Resolve toolchain and version
+        id: vars
+        run: |
+          GO_PIN="$(tr -d '[:space:]' < go.version | sed 's/^go//')"
+          echo "go_version=${GO_PIN}" >> "$GITHUB_OUTPUT"
+
+          UPSTREAM_VER="$(tr -d '[:space:]' < upstream.version)"
+          BUILD_TAG="${{ github.event.inputs.tag_name }}"
+          if [ -z "$BUILD_TAG" ]; then
+            BUILD_TAG="v${UPSTREAM_VER}-lx.5"
+          fi
+          echo "tag=${BUILD_TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${BUILD_TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.vars.outputs.go_version }}
+
+      - name: Apply podkop_slim patch
+        if: ${{ inputs.apply_slim }}
+        run: |
+          echo "Applying podkop_slim patch..."
+          git apply patches/0001-podkop-slim.patch
+          rm -f cmd/sing-box/cmd_api*.go
+
+      - name: Build binary (ARM64)
+        run: |
+          TAGS="with_quic,with_utls,with_clash_api,with_xhttp,badlinkname,tfogo_checklinkname0"
+          if [ "${{ inputs.apply_slim }}" = "true" ]; then
+            TAGS="${TAGS},podkop_slim"
+          fi
+
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -v -trimpath \
+            -tags "$TAGS" \
+            -ldflags "-s -w -buildid= -checklinkname=0 -X 'github.com/sagernet/sing-box/constant.Version=${{ steps.vars.outputs.version }}'" \
+            -o dist/sing-box ./cmd/sing-box
+
+          echo "=== Binary size ==="
+          ls -lh dist/sing-box
+          file dist/sing-box
+
+      - name: Install apk-tools
+        run: |
+          docker run --rm -v /usr/local/bin:/mnt alpine:edge sh -c "apk add --no-cache apk-tools-static && cp /sbin/apk.static /mnt/apk && chmod +x /mnt/apk"
+          apk --version
+
+      - name: Package OpenWrt APK
+        run: |
+          chmod +x .github/build_podkop_apk.sh
+          .github/build_podkop_apk.sh \
+            "${{ inputs.architecture }}" \
+            "${{ steps.vars.outputs.version }}" \
+            "dist/sing-box" \
+            "dist/sing-box_${{ steps.vars.outputs.version }}_openwrt_${{ inputs.architecture }}.apk"
+
+          cd dist
+          sha256sum *.apk > SHA256SUMS
+          ls -lh
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sing-box_${{ steps.vars.outputs.version }}_openwrt_${{ inputs.architecture }}
+          path: dist/*
+
+      - name: Publish Release
+        if: ${{ inputs.release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.vars.outputs.tag }}"
+          cat > notes.md << 'EOF'
+          ### sing-box-lx for OpenWrt 25.12 (${{ inputs.architecture }})
+          - **Architecture:** `${{ inputs.architecture }}`
+          - **Features:** `with_quic,with_utls,with_clash_api,with_xhttp`
+          - **Podkop slim:** `${{ inputs.apply_slim }}` (snell and api CLI stripped)
+          - **Uncompressed:** optimized for direct flash/squashfs execution without RAM blowup
+          EOF
+          gh release create "$TAG" dist/* \
+            --title "sing-box-lx ${{ steps.vars.outputs.version }} for OpenWrt" \
+            --notes-file notes.md \
+            --target "$GITHUB_SHA" || gh release upload "$TAG" dist/* --clobber
