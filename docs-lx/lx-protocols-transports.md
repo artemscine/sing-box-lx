@@ -22,7 +22,7 @@ overview links to: every field, its type, its default, its validation, and the
 exact error text you get when it is wrong.
 
 Everything here is sourced from the option structs (`option/v2ray_xhttp.go`,
-`option/wireguard_awg.go`, `option/masque.go`) and the protocol implementations,
+`option/wireguard_awg.go`, `option/masque_lx.go`) and the protocol implementations,
 not from memory — defaults and error strings are the ones the current core emits.
 
 > ⚠️ Every key / UUID / address below is a **placeholder**. Never commit real
@@ -247,12 +247,13 @@ expect: an `xmux` section arriving from a subscription used to be ignored silent
 so the client behaved differently from what the server author intended.
 
 **A `nil`/absent `xmux` section still enables XMUX with Xray-compatible defaults** —
-the pool is always on, matching Xray-core and sing-box-extended.
+the pool is always on, matching Xray-core. The defaults apply only when the section
+is absent or entirely empty; a section with any field set takes every field as written.
 
 | Key | Type | Default | Meaning |
 |-----|------|---------|---------|
-| `xmux.max_concurrency` | range | `1-1` | how many streams may share one HTTP connection. **Mutually exclusive** with `max_connections` |
-| `xmux.max_connections` | range | unlimited | how many connections the pool holds; below this count a new connection is always opened. **Mutually exclusive** with `max_concurrency` |
+| `xmux.max_concurrency` | range | unlimited | how many streams may share one HTTP connection. **Mutually exclusive** with `max_connections` |
+| `xmux.max_connections` | range | `3-3` | how many connections the pool holds; below this count a new connection is always opened. **Mutually exclusive** with `max_concurrency` |
 | `xmux.c_max_reuse_times` | range | unlimited | how many times a connection may be handed out for a new stream before it retires |
 | `xmux.h_max_request_times` | range | `600-900` | how many **HTTP requests** may traverse a connection before it retires. Counts requests, not streams — in `packet-up` one stream issues many upload POSTs |
 | `xmux.h_max_reusable_secs` | range | `1800-3000` | how long a connection stays reusable, in seconds |
@@ -921,8 +922,8 @@ all connect to the same endpoint.
 ## 3.7 `vhttp`: auto / h3 / h2
 
 `auto` is the default (SPEC 074): it tries `h3` (QUIC) first and falls back to `h2`
-when the QUIC handshake does not complete within 3 s, remembering the winner for the
-rest of the process. The failure mode it exists for produces **no error** — the
+when the QUIC handshake does not complete within 3 s, remembering the winner; a remembered
+leg that stops coming up is forgotten and the other one is tried in the same dial. The failure mode it exists for produces **no error** — the
 endpoint (or a TCP-only hop in front of it: an HTTP CONNECT detour, a VLESS/Trojan
 link in a chain) silently swallows QUIC and every dial just hangs. A fixed `h3` is
 the fastest when the path is known-clean; on networks that filter inbound UDP:443

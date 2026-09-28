@@ -28,6 +28,88 @@ required for stable tags); this changelog section is the fallback used for pre-r
 > тогда. Пользовательские ноты билингвальны там, где это важно, — в
 > [`releases/`](releases/).
 
+#### v1.14.2-lx.8
+
+Синк с `upstream/stable` поверх `v1.14.2-lx.7` (SPEC 109). Пользовательские ноты (EN+RU):
+[`docs-lx/releases/v1.14.2-lx.8.md`](releases/v1.14.2-lx.8.md). База — sing-box `v1.14.2` + 15
+коммитов (`a781ae655`), нового тега у апстрима нет; дрейф 0. Модули: `sing` 5f9aad7def20, `sing-mux`
+v0.3.9-0.20260927144857, `sing-quic` 8601a428f4db, `sing-snell` bc5a12ac736f — `require` равен stable.
+Go 1.26.8, cronet, NDK/JDK, `upstream.version` не менялись; форк-сабмодули на прежних пинах
+(`wireguard-go` v0.0.7, `sing-tun` ddaa4ca25e3b, `gvisor`, `utls` v1.8.7). Из-за смены версий
+модулей перед тегом прогнан dry run `lx-release.yml`.
+
+- 📌 **Мерж `741d5ffa1`**: управление простаивающими соединениями (`route.ReferenceManager`,
+  `adapter.IdleConnectionKeeper`, `adapter.Referrer`), power-отчёты, `Fix UDP fragmentation`,
+  `Fix tun GSO check`, `Fix system TUN read loop stopping on write errors`, глобальные серверы
+  systemd-resolved, пауза и пробуждение в libbox (`WakeNow`, `RecordScreenState`,
+  `RecordLockState`). Конфликты: `common/interrupt/group.go`, `dns/transport_adapter.go`,
+  `protocol/group/urltest.go`, `go.sum`. В 19 автослитых файлах с нашей дельтой набор наших строк
+  не изменился.
+- 🔧 **Хотфикс SPEC 084 снят**: апстрим вынес `Close` из-под мьютекса `interrupt.Group` тем же
+  способом (`0ed951aa0`). `group.go` и `conn.go` равны апстримным; `NewSingPacketConn` и
+  `SingPacketConn` (SPEC 064) вынесены в `common/interrupt/sing_packet_conn_lx.go`.
+- 🔧 **`urltest` `round_robin`: весь пул в `References()`** (`bd0b66934`) — апстримный учёт ссылок
+  называл используемым только выбранный узел, остальным узлам пула закрывались бы простаивающие
+  соединения после каждого использования.
+- ⚠️ **SPEC 028 на Linux и Android начал действовать с этого релиза**: `UDPFragmentDefault = true`
+  до `Fix UDP fragmentation` не ставил сокет-опцию, и ядро держало DF само. У `masque` по h3 флаг
+  оставлен, хотя у своих QUIC-протоколов апстрим его убрал. Прогон вложенных туннелей и WARP по h3
+  на устройстве не проводился.
+- 🧰 `TestLazyStateTransitions` читает часы сна на тик позже (`1286271a7`) — падал под нагрузкой.
+- ⚠️ XHTTP с `xmux` новых интерфейсов не реализует: его пул вне учёта ссылок и закрытия на паузе.
+
+#### v1.14.2-lx.7
+
+Хотфикс поверх `v1.14.2-lx.6`. Пользовательские ноты (EN+RU):
+[`docs-lx/releases/v1.14.2-lx.7.md`](releases/v1.14.2-lx.7.md). База — sing-box `v1.14.2`,
+тулчейн и зависимости с lx.6 не менялись (Go 1.26.8 = stable, сабмодули на месте). `upstream/stable`
+на 2026-09-28 впереди на те же 15 коммитов без нового тега; из-за них `require` расходится со stable
+в четырёх модулях (`sing`, `sing-mux`, `sing-quic`, `sing-snell`). Синк снова отложен: релиз
+несёт только исправления masque, а пробный мерж даёт конфликты в `common/interrupt/group.go`,
+`dns/transport_adapter.go`, `protocol/group/urltest.go` и `go.sum` и меняет поведение
+`Pause`/`Wake` в libbox — это отдельная задача с прогоном на устройстве. Из отложенного для нас
+значимы `Fix UDP fragmentation` (на Linux/Android `UDPFragmentDefault` до него не снимает DF,
+на это опирается SPEC 028) и `Fix interrupt group holding lock while closing connections`
+(совпадает с нашим SPEC 084).
+
+- 🐛 **masque: три ожидания без предела** (SPEC 108, находки исследования SPEC 107).
+  - `vhttp: auto`: ветка запомненного h2 в `connect` (`protocol/masque/outbound.go`) при отказе
+    возвращала ошибку и не трогала память — узел отказывал на каждом dial до рестарта. Теперь
+    отказ не по отмене вызывающим сбрасывает память (`forgetNetwork`) и отдаёт управление общему
+    пути `auto`; h2 в этой попытке повторно не пробуется, настенный таймер фолбэка выключен.
+  - h2: `h2RawConn.Close` (`transport/masque/client_h2.go`) брал `writeMu` до закрытия сокета и
+    вставал за записью без дедлайна. Теперь `SetWriteDeadline` на `h2CloseGrace` (1 с), `TryLock`,
+    `RST_STREAM` только при свободном мьютексе, затем закрытие сокета.
+  - h3: `ReadResponse` в `dialCONNECTIP` (`transport/masque/masque.go`) не принимал контекст.
+    Обёртка `readResponse` на время чтения вешает на контекст `CancelRead`/`CancelWrite` и снимает
+    привязку после ответа.
+  - Тесты: `protocol/masque/auto_h2_recover_lx_test.go` (5), `transport/masque/hang_lx_test.go` (4).
+    На живом WARP не прогонялось.
+- 🧰 **Файлы masque переименованы**: `option/masque.go` → `option/masque_lx.go`,
+  `test/masque_test.go` → `test/masque_lx_test.go`. Апстрим 1.15 кладёт по этим путям свой MASQUE
+  (endpoint'ы `masque-client`/`masque-server`); код не менялся.
+- 📌 **Исследование SPEC 107**: сравнение нашего masque-outbound с MASQUE апстрима 1.15 —
+  совместимость с WARP, реестр дефектов обеих реализаций, варианты перехода на 1.15.
+
+#### v1.14.2-lx.6
+
+Хотфикс поверх `v1.14.2-lx.5`. Пользовательские ноты (EN+RU):
+[`docs-lx/releases/v1.14.2-lx.6.md`](releases/v1.14.2-lx.6.md). База — sing-box `v1.14.2`,
+зависимости с lx.5 не менялись. `upstream/stable` на 2026-09-28 ушёл на 15 коммитов после `v1.14.2`
+без нового тега (управление idle-соединениями, power-отчёты, `Fix UDP fragmentation`, `Fix tun GSO
+check` и три коммита, отложенные в lx.5). Это полноценный синк, а не хотфикс: откладываем до
+следующего релиза.
+
+- 🔧 **XMUX: дефолт `max_connections 3` вместо `max_concurrency 1`** — `normalizeXmux`
+  (`transport/v2rayxhttp/xmux.go`) при отсутствующей или полностью пустой секции `xmux` ставил
+  `max_concurrency 1-1` (эталон sing-box-extended 2.6.4, SPEC 059), то есть TLS-соединение на каждый
+  поток. Xray-core сменил дефолт на `maxConnections 6`, затем на `3` (`18e2839`, XTLS/Xray-core#6376):
+  ТСПУ режет больше трёх соединений к серверу на мобильном интернете. Теперь дефолт —
+  `max_connections 3-3`, `h_max_request_times 600-900`, `h_max_reusable_secs 1800-3000`; правило
+  «всё или ничего» не менялось. Таблицы дефолтов в SPEC 059 §3, FEATURE 002-XHTTP и
+  `lx-protocols-transports` обновлены. Заявлено в
+  [issue #32](https://github.com/Leadaxe/sing-box-lx/issues/32).
+
 #### v1.14.2-lx.5
 
 Хотфикс поверх `v1.14.2-lx.4`. Пользовательские ноты (EN+RU):
