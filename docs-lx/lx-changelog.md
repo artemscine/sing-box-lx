@@ -28,6 +28,66 @@ required for stable tags); this changelog section is the fallback used for pre-r
 > тогда. Пользовательские ноты билингвальны там, где это важно, — в
 > [`releases/`](releases/).
 
+#### v1.14.2-lx.11
+
+Синк с `upstream/stable` на 4 коммита от 2026-09-29, отложенных в lx.10. Пользовательские ноты
+(EN+RU): [`docs-lx/releases/v1.14.2-lx.11.md`](releases/v1.14.2-lx.11.md). База — sing-box
+`v1.14.2` + 20 коммитов, нового тега у апстрима нет; дрейф 0 (merge-base = `3ff24dbe5`). Go 1.26.8,
+cronet, NDK/JDK, `upstream.version` не менялись; `require` равен `stable`. Из-за смены версий
+модулей перед тегом прогнан dry run `lx-release.yml` (зелёный).
+
+- 📌 **Мерж `886bc48ec`**: `de52a8126` «Fix zero UDP checksum», `b93c30f2a` «Fix protocol input
+  validation», `3ff24dbe5` «Fix connected UDP reads on BSD» (новый `common/dialer/udp_conn.go`),
+  `834f4551d` документация. Конфликт — `go.sum`. В 17 автослитых файлах нашей дельты нет, они
+  равны апстримным.
+- 📌 **Форк-сабмодули сдвинуты до мержа ядра**: `wireguard-go` `64065e6` — мерж sagernet `6731c73`
+  («conn: Fix connected socket receive on darwin», `n == 0` → `ErrRebindRequired`) поверх lx-линии,
+  гейт `hasReserved` в `msgx_darwin.go` сохранён; `sing-tun` `6f56eca` — мерж sagernet
+  `0bdadeb4c934` (`8ab0e83` zero UDP checksum, `0bdadeb` input validation), lx-дельта в
+  `stack_system.go` не изменилась. `replace` на четыре форка на месте (`go list -m`).
+- Проверки на устройстве до тега не было.
+
+#### v1.14.2-lx.10
+
+Хотфикс Tailscale (SPEC 112, issue #33). Пользовательские ноты (EN+RU):
+[`docs-lx/releases/v1.14.2-lx.10.md`](releases/v1.14.2-lx.10.md). База — как в lx.9 (sing-box
+`v1.14.2` + 16 коммитов); Go 1.26.8, cronet, NDK/JDK, `upstream.version` не менялись.
+
+- 🐛 **Tailscale: трафик по прямому пути** (сабмодуль `wireguard-go` `9076fc9`, SPEC 112). Графт AWG
+  обнулил `MessageEncapsulatingTransportSize`; устройство Tailscale собрано из того же форка
+  (глобальный `replace`), а magicsock на прямом UDP-пути отвергает `offset != 8`. Константа
+  возвращена к апстримным 8, запас добавлен в буферы рукопожатия, ответа, cookie, junk и `i1`–`i5`;
+  путь данных уже учитывал его. Байты на проводе у WireGuard/AWG не изменились. Тесты:
+  `device/lx_send_headroom_test.go` (WG, AWG 2.0, AWG 3.x), `protocol/tailscale/send_headroom_lx_test.go`.
+  Проверки на устройстве до тега не было (решение владельца: проверка на пользователях).
+- ⏸️ **Дрейф `upstream/stable` отложен**: 4 коммита от 2026-09-29 (`de52a8126` «Fix zero UDP
+  checksum», `b93c30f2a` «Fix protocol input validation», `3ff24dbe5` «Fix connected UDP reads on
+  BSD», документация) с бампами `wireguard-go` v0.0.8-pre и `sing-tun` v0.9.7-pre. Бампы требуют
+  разбора форк-сабмодулей до мержа ядра (runbook §1); хотфикс выходит без них, мерж — отдельной
+  задачей.
+
+#### v1.14.2-lx.9
+
+Хотфикс Tailscale (SPEC 111) и синк с `upstream/stable` на один коммит `f43d07faf` «Update
+dependencies». Пользовательские ноты (EN+RU): [`docs-lx/releases/v1.14.2-lx.9.md`](releases/v1.14.2-lx.9.md).
+База — sing-box `v1.14.2` + 16 коммитов, нового тега у апстрима нет; дрейф 0. Go 1.26.8, cronet,
+NDK/JDK, `upstream.version` не менялись; форк-сабмодули на прежних пинах. Из-за смены версий
+модулей перед тегом прогнан dry run `lx-release.yml`.
+
+- 🐛 **Tailscale: канал к координатору — Noise поверх HTTPS (443) по умолчанию** (`eb2ad217c`,
+  SPEC 111, реестр HOTFIXES). Клиент tailscale сначала дайлит `controlplane.tailscale.com:80` и
+  делает `Upgrade` на Noise; за DPI, замораживающим поток после смены протокола, сторож долгого
+  опроса (120 с) отменял запрос, а не соединение, и новые запросы уходили в тот же мёртвый сокет —
+  переход на 443 наступал только после закрытия сокета ОС (~15 мин после каждого старта).
+  Воспроизведено на роутере: `Send-Q 5186` на `:80`, `retr 0x0A`. Новый файл
+  `protocol/tailscale/control_https_lx.go` ставит `TS_FORCE_NOISE_443=true`, если переменная не задана
+  явно; апстримные файлы не тронуты. Полевой проверки на роутере до тега не было.
+- 📌 **Мерж `b785b0957`**: `sing` v0.9.6, `sing-cloudflared` v0.1.3, `sing-mux` v0.3.9, `sing-quic`
+  v0.7.1, `sing-tun` v0.9.6 — те же коммиты, что были, теперь под тегами. Новый код только в
+  `sing-openvpn` v0.1.0 и `sing-openconnect` v0.1.0: «Add client suspend and resume», ядро эти
+  методы пока не вызывает. Конфликт — `go.sum`; `replace` на форк-сабмодули не сдвинулся
+  (`go list -m`).
+
 #### v1.14.2-lx.8
 
 Синк с `upstream/stable` поверх `v1.14.2-lx.7` (SPEC 109). Пользовательские ноты (EN+RU):
@@ -46,8 +106,9 @@ Go 1.26.8, cronet, NDK/JDK, `upstream.version` не менялись; форк-�
   `protocol/group/urltest.go`, `go.sum`. В 19 автослитых файлах с нашей дельтой набор наших строк
   не изменился.
 - 🔧 **Хотфикс SPEC 084 снят**: апстрим вынес `Close` из-под мьютекса `interrupt.Group` тем же
-  способом (`0ed951aa0`). `group.go` и `conn.go` равны апстримным; `NewSingPacketConn` и
-  `SingPacketConn` (SPEC 064) вынесены в `common/interrupt/sing_packet_conn_lx.go`.
+  способом (`0ed951aa0`). `group.go` и `conn.go` равны апстримным. `NewSingPacketConn` и
+  `SingPacketConn` — действующий хотфикс SPEC 064, не остаток 084 — вынесены в
+  `common/interrupt/sing_packet_conn_lx.go` без изменения поведения.
 - 🔧 **`urltest` `round_robin`: весь пул в `References()`** (`bd0b66934`) — апстримный учёт ссылок
   называл используемым только выбранный узел, остальным узлам пула закрывались бы простаивающие
   соединения после каждого использования.
