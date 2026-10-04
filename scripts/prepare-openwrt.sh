@@ -10,7 +10,7 @@ if [[ -e "$destination" ]]; then
   exit 1
 fi
 revision=$(git -C "$project" rev-parse HEAD)
-git clone --quiet --shared --no-checkout "$project" "$destination"
+git -c init.defaultBranch=lx clone --quiet --shared --no-checkout "$project" "$destination"
 git -C "$destination" checkout --quiet --detach "$revision"
 for module in gvisor sing-tun utls wireguard-go; do
   module_path="$project/submodules/$module"
@@ -21,7 +21,7 @@ for module in gvisor sing-tun utls wireguard-go; do
     exit 1
   fi
   rmdir "$destination/submodules/$module"
-  git clone --quiet --shared --no-checkout "$module_path" "$destination/submodules/$module"
+  git -c init.defaultBranch=lx clone --quiet --shared --no-checkout "$module_path" "$destination/submodules/$module"
   git -C "$destination/submodules/$module" checkout --quiet --detach "$expected"
 done
 if [[ "$slim" == 1 ]]; then
