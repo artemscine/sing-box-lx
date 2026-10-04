@@ -146,4 +146,4 @@ jobs:
           gh release create "$TAG" release-files/* \
             --title "sing-box-lx ${{ steps.vars.outputs.version }} for OpenWrt" \
             --notes-file notes.md \
-            --target "$GITHUB_SHA" 
+            --target "$GITHUB_SHA"
