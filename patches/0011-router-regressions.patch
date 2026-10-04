@@ -106,7 +106,7 @@ index 000000000..ce3cf7677
 +			}))
 +			defer server.Close()
 +			destination, _ := url.Parse(server.URL)
-+			transport := NewHTTPSRaw(dns.TransportAdapter{}, log.NewNOPFactory().Logger(), N.SystemDialer, destination, nil, M.ParseSocksaddr(destination.Host), nil)
++			transport := NewHTTPSRaw(dns.TransportAdapter{}, log.NewNOPFactory().Logger(), N.SystemDialer, destination, http.Header{}, M.ParseSocksaddr(destination.Host), nil)
 +			defer transport.Close()
 +			original := transport.transport
 +			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
