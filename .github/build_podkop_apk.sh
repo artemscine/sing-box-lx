@@ -25,10 +25,14 @@ fi
 
 PROJECT=$(cd "$(dirname "$0")/.."; pwd)
 
-# Convert version to valid APK format (e.g. 1.14.2-lx.5 -> 1.14.2.5-r0)
-APK_VERSION=$(echo "$VERSION" | sed -E 's/-lx\.([0-9]+).*/.\1-r0/' | sed -E 's/-[a-zA-Z].*//')
-if [[ "$APK_VERSION" != *-r* ]]; then
-  APK_VERSION="${APK_VERSION}-r0"
+# Keep the fork release and router patch revision distinct in APK ordering.
+if [[ "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-lx\.([0-9]+)-openwrt\.([0-9]+)$ ]]; then
+  APK_VERSION="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}-r${BASH_REMATCH[3]}"
+elif [[ "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-lx\.([0-9]+)$ ]]; then
+  APK_VERSION="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}-r0"
+else
+  echo "Unsupported OpenWrt package version: $VERSION" >&2
+  exit 1
 fi
 
 ROOT_DIR=$(mktemp -d)
