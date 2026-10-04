@@ -83,7 +83,7 @@ jobs:
         if: ${{ inputs.apply_slim }}
         run: bash scripts/test-openwrt.sh
 
-      - name: Build and package OpenWrt APK
+      - name: Build and package OpenWrt APK and IPK
         env:
           OPENWRT_BUILD_VERSION: ${{ steps.vars.outputs.version }}
         run: |
@@ -91,7 +91,7 @@ jobs:
           if [ "${{ inputs.apply_slim }}" = "true" ]; then SLIM=1; fi
           bash scripts/build-openwrt.sh "${{ matrix.architecture }}" dist "$SLIM"
           cd dist
-          sha256sum *.apk > SHA256SUMS
+          sha256sum *.apk *.ipk > SHA256SUMS
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
@@ -99,6 +99,7 @@ jobs:
           name: sing-box_${{ steps.vars.outputs.version }}_openwrt_${{ matrix.architecture }}
           path: |
             dist/*.apk
+            dist/*.ipk
             dist/SHA256SUMS
             dist/build-*.txt
 
@@ -127,9 +128,9 @@ jobs:
       - name: Prepare release files
         run: |
           mkdir -p release-files
-          find all-dist -type f \( -name '*.apk' -o -name 'build-*.txt' \) -exec cp {} release-files/ \;
+          find all-dist -type f \( -name '*.apk' -o -name '*.ipk' -o -name 'build-*.txt' \) -exec cp {} release-files/ \;
           cd release-files
-          sha256sum *.apk > SHA256SUMS
+          sha256sum *.apk *.ipk > SHA256SUMS
           ls -lh
       - name: Publish Release
         env:
@@ -137,7 +138,7 @@ jobs:
         run: |
           TAG="${{ steps.vars.outputs.tag }}"
           cat > notes.md << 'EOF'
-          ### sing-box-lx for OpenWrt 25.12 (x86_64, aarch64_cortex-a53)
+          ### sing-box-lx for OpenWrt 24.10 (IPK) / 25.12 (APK) (x86_64, aarch64_cortex-a53)
           - **Features:** `with_quic,with_utls,with_clash_api,with_xhttp`
           - **Podkop profile:** ${{ inputs.apply_slim }} (slim plus DNS, UDP, TLS, loop and logging fixes)
           - **Source and patch hashes:** included in architecture-specific build manifests

@@ -32,10 +32,12 @@ binary="$output/sing-box-$architecture"
   -o "$binary" ./cmd/sing-box)
 bash "$project/.github/build_podkop_apk.sh" "$architecture" "$version" "$binary" \
   "$output/sing-box_${version}_openwrt_${architecture}.apk"
+bash "$project/.github/build_podkop_ipk.sh" "$architecture" "$version" "$binary" \
+  "$output/sing-box_${version}_openwrt_${architecture}.ipk"
 {
   printf 'version=%s\nsource_revision=%s\ntoolchain=%s\ntags=%s\n' "$version" "$revision" "$toolchain" "$tags"
   if [[ "$slim" == 1 ]]; then
     (cd "$project" && sha256sum patches/[0-9][0-9][0-9][0-9]-*.patch)
   fi
 } > "$output/build-$architecture.txt"
-(cd "$output" && sha256sum "$(basename "$binary")" "sing-box_${version}_openwrt_${architecture}.apk")
+(cd "$output" && sha256sum "$(basename "$binary")" "sing-box_${version}_openwrt_${architecture}.apk" "sing-box_${version}_openwrt_${architecture}.ipk")
