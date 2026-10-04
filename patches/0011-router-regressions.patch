@@ -45,7 +45,7 @@ index 000000000..4db94bc55
 +			for attempt := 0; attempt < 2; attempt++ {
 +				raw, err := net.DialTimeout("tcp", server.Listener.Addr().String(), time.Second)
 +				if err != nil { t.Fatal(err) }
-+				conn := &utlsALPNWrapper{UConn: utls.UClient(raw, &utls.Config{ServerName: "localhost", InsecureSkipVerify: true, ClientSessionCache: cache}, fingerprint)}
++				conn := &utlsALPNWrapper{utlsConnWrapper: utlsConnWrapper{UConn: utls.UClient(raw, &utls.Config{ServerName: "localhost", InsecureSkipVerify: true, ClientSessionCache: cache}, fingerprint)}}
 +				_ = conn.SetDeadline(time.Now().Add(3*time.Second))
 +				if err := conn.HandshakeContext(context.Background()); err != nil { conn.Close(); t.Fatal(err) }
 +				if conn.HandshakeState.Hello != nil || conn.HandshakeState.ServerHello != nil || conn.Extensions != nil { conn.Close(); t.Fatal("handshake state was retained") }

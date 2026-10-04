@@ -17,7 +17,7 @@ on:
         type: boolean
         default: true
       tag_name:
-        description: "Release tag name (leave blank to auto-detect from upstream.version)"
+        description: "Release tag name (leave blank to use openwrt.version)"
         default: ""
 
 permissions:
@@ -144,4 +144,4 @@ jobs:
           gh release create "$TAG" release-files/* \
             --title "sing-box-lx ${{ steps.vars.outputs.version }} for OpenWrt" \
             --notes-file notes.md \
-            --target "$GITHUB_SHA" 
+            --target "$GITHUB_SHA"
