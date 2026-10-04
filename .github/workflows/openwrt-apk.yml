@@ -144,7 +144,29 @@ jobs:
           - **Source and patch hashes:** included in architecture-specific build manifests
           - **Uncompressed:** optimized for direct flash/squashfs execution without RAM blowup
           EOF
-          gh release create "$TAG" release-files/* \
-            --title "sing-box-lx ${{ steps.vars.outputs.version }} for OpenWrt" \
-            --notes-file notes.md \
-            --target "$GITHUB_SHA"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release view "$TAG" --json assets --jq '.assets[].name' > published-assets.txt
+            # Keep the original manifests with the original APKs. Added IPKs
+            # receive manifests describing the build that produced them.
+            for manifest in release-files/build-*.txt; do
+              cp "$manifest" "${manifest%.txt}-ipk.txt"
+            done
+            for asset in release-files/*.apk release-files/*.ipk release-files/build-*.txt; do
+              name=$(basename "$asset")
+              if grep -Fxq "$name" published-assets.txt; then
+                echo "Preserving published asset: $name"
+                continue
+              fi
+              gh release upload "$TAG" "$asset"
+            done
+          else
+            gh release create "$TAG" release-files/* \
+              --title "sing-box-lx ${{ steps.vars.outputs.version }} for OpenWrt" \
+              --notes-file notes.md \
+              --target "$GITHUB_SHA"
+          fi
+          # Hash the actual published packages, including preserved APKs.
+          mkdir -p published-packages
+          gh release download "$TAG" --pattern '*.apk' --pattern '*.ipk' --dir published-packages
+          (cd published-packages && sha256sum *.apk *.ipk > SHA256SUMS)
+          gh release upload "$TAG" published-packages/SHA256SUMS --clobber
