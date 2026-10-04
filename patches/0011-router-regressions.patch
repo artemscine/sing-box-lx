@@ -5,20 +5,11 @@ Subject: [PATCH] test(openwrt): cover DNS concurrency and post-handshake uTLS
  traffic
 
 ---
- common/tls/utls_podkop_test.go     | 40 ++++++++++++++++++
- dns/transport/https_podkop_test.go | 64 +++++++++++++++++++++++++++++
- route/dns_nat_podkop_test.go       | 65 ++++++++++++++++++++++++++++++
- 3 files changed, 169 insertions(+)
- create mode 100644 common/tls/utls_podkop_test.go
- create mode 100644 dns/transport/https_podkop_test.go
- create mode 100644 route/dns_nat_podkop_test.go
-
 diff --git a/common/tls/utls_podkop_test.go b/common/tls/utls_podkop_test.go
 new file mode 100644
-index 000000000..4db94bc55
 --- /dev/null
 +++ b/common/tls/utls_podkop_test.go
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,55 @@
 +//go:build with_utls
 +
 +package tls
@@ -44,27 +35,41 @@ index 000000000..4db94bc55
 +			cache := utls.NewLRUClientSessionCache(2)
 +			for attempt := 0; attempt < 2; attempt++ {
 +				raw, err := net.DialTimeout("tcp", server.Listener.Addr().String(), time.Second)
-+				if err != nil { t.Fatal(err) }
++				if err != nil {
++					t.Fatal(err)
++				}
 +				conn := &utlsALPNWrapper{utlsConnWrapper: utlsConnWrapper{UConn: utls.UClient(raw, &utls.Config{ServerName: "localhost", InsecureSkipVerify: true, ClientSessionCache: cache}, fingerprint)}}
-+				_ = conn.SetDeadline(time.Now().Add(3*time.Second))
-+				if err := conn.HandshakeContext(context.Background()); err != nil { conn.Close(); t.Fatal(err) }
-+				if conn.HandshakeState.Hello != nil || conn.HandshakeState.ServerHello != nil || conn.Extensions != nil { conn.Close(); t.Fatal("handshake state was retained") }
++				_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
++				if err := conn.HandshakeContext(context.Background()); err != nil {
++					conn.Close()
++					t.Fatal(err)
++				}
++				if conn.HandshakeState.Hello != nil || conn.HandshakeState.ServerHello != nil || conn.Extensions != nil {
++					conn.Close()
++					t.Fatal("handshake state was retained")
++				}
 +				_, err = io.WriteString(conn, "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-+				if err != nil { conn.Close(); t.Fatal(err) }
++				if err != nil {
++					conn.Close()
++					t.Fatal(err)
++				}
 +				body, err := io.ReadAll(conn)
 +				conn.Close()
-+				if err != nil { t.Fatal(err) }
-+				if len(body) == 0 { t.Fatal("no application data after handshake release") }
++				if err != nil {
++					t.Fatal(err)
++				}
++				if len(body) == 0 {
++					t.Fatal("no application data after handshake release")
++				}
 +			}
 +		})
 +	}
 +}
 diff --git a/dns/transport/https_podkop_test.go b/dns/transport/https_podkop_test.go
 new file mode 100644
-index 000000000..ce3cf7677
 --- /dev/null
 +++ b/dns/transport/https_podkop_test.go
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,77 @@
 +package transport
 +
 +import (
@@ -92,7 +97,10 @@ index 000000000..ce3cf7677
 +			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 +				body, _ := io.ReadAll(r.Body)
 +				var query mDNS.Msg
-+				if err := query.Unpack(body); err != nil { t.Error(err); return }
++				if err := query.Unpack(body); err != nil {
++					t.Error(err)
++					return
++				}
 +				if query.Question[0].Name == "slow.example." {
 +					close(started)
 +					<-r.Context().Done()
@@ -118,23 +126,32 @@ index 000000000..ce3cf7677
 +				_, err := transport.Exchange(ctx, &query)
 +				done <- err
 +			}()
-+			select { case <-started: case <-ctx.Done(): t.Fatal("slow query did not reach the server") }
++			select {
++			case <-started:
++			case <-ctx.Done():
++				t.Fatal("slow query did not reach the server")
++			}
 +			if laterAnswer {
 +				var query mDNS.Msg
 +				query.SetQuestion("fast.example.", mDNS.TypeA)
-+				if _, err := transport.Exchange(ctx, &query); err != nil { t.Fatal(err) }
++				if _, err := transport.Exchange(ctx, &query); err != nil {
++					t.Fatal(err)
++				}
 +			}
-+			if err := <-done; !errors.Is(err, context.DeadlineExceeded) { t.Fatalf("expected timeout, got %v", err) }
-+			if (transport.transport == original) != laterAnswer { t.Fatal("live transport must survive; frozen transport must reset") }
++			if err := <-done; !errors.Is(err, context.DeadlineExceeded) {
++				t.Fatalf("expected timeout, got %v", err)
++			}
++			if (transport.transport == original) != laterAnswer {
++				t.Fatal("live transport must survive; frozen transport must reset")
++			}
 +		})
 +	}
 +}
 diff --git a/route/dns_nat_podkop_test.go b/route/dns_nat_podkop_test.go
 new file mode 100644
-index 000000000..feb226f90
 --- /dev/null
 +++ b/route/dns_nat_podkop_test.go
-@@ -0,0 +1,65 @@
+@@ -0,0 +1,82 @@
 +package route
 +
 +import (
@@ -187,19 +204,35 @@ index 000000000..feb226f90
 +	returned := make(chan struct{})
 +	go func() { handler.NewPacketEx(buf.As(wire), M.ParseSocksaddr("127.0.0.1:12345")); close(returned) }()
 +	released := false
-+	defer func() { if !released { close(dnsRouter.release) } }()
-+	select { case <-dnsRouter.entered: case <-time.After(time.Second): t.Fatal("DNS exchange did not start") }
-+	select { case <-returned: case <-time.After(time.Second): t.Fatal("DNS exchange blocked the inbound reader") }
++	defer func() {
++		if !released {
++			close(dnsRouter.release)
++		}
++	}()
++	select {
++	case <-dnsRouter.entered:
++	case <-time.After(time.Second):
++		t.Fatal("DNS exchange did not start")
++	}
++	select {
++	case <-returned:
++	case <-time.After(time.Second):
++		t.Fatal("DNS exchange blocked the inbound reader")
++	}
 +	close(dnsRouter.release)
 +	released = true
 +	select {
 +	case wire := <-writer.response:
 +		var response mDNS.Msg
-+		if err := response.Unpack(wire); err != nil { t.Fatal(err) }
-+		if response.Id != query.Id || !response.Response { t.Fatal("invalid DNS response") }
-+	case <-time.After(time.Second): t.Fatal("DNS response was lost")
++		if err := response.Unpack(wire); err != nil {
++			t.Fatal(err)
++		}
++		if response.Id != query.Id || !response.Response {
++			t.Fatal("invalid DNS response")
++		}
++	case <-time.After(time.Second):
++		t.Fatal("DNS response was lost")
 +	}
 +}
 -- 
 2.55.0
-

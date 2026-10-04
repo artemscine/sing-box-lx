@@ -24,7 +24,7 @@ index 582677ec3..abb1f0145 100644
  	transportAccess  sync.Mutex
  	transport        *HTTPSTransportWrapper
  	transportResetAt time.Time
-+	answeredStartAt atomic.Int64 // unix nanoseconds of the latest answered exchange start
++	answeredStartAt  atomic.Int64 // unix nanoseconds of the latest answered exchange start
  }
  
  func NewHTTPS(ctx context.Context, logger log.ContextLogger, tag string, options option.RemoteHTTPSDNSServerOptions) (adapter.DNSTransport, error) {
