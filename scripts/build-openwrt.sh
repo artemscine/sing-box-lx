@@ -31,13 +31,13 @@ binary="$output/sing-box-$architecture"
   -ldflags "-s -w -buildid= -checklinkname=0 -X github.com/sagernet/sing-box/constant.Version=$version" \
   -o "$binary" ./cmd/sing-box)
 bash "$project/.github/build_podkop_apk.sh" "$architecture" "$version" "$binary" \
-  "$output/sing-box_${version}_openwrt_${architecture}.apk"
+  "$output/sing-box_${version}_${architecture}.apk"
 bash "$project/.github/build_podkop_ipk.sh" "$architecture" "$version" "$binary" \
-  "$output/sing-box_${version}_openwrt_${architecture}.ipk"
+  "$output/sing-box_${version}_${architecture}.ipk"
 {
   printf 'version=%s\nsource_revision=%s\ntoolchain=%s\ntags=%s\n' "$version" "$revision" "$toolchain" "$tags"
   if [[ "$slim" == 1 ]]; then
     (cd "$project" && sha256sum patches/[0-9][0-9][0-9][0-9]-*.patch)
   fi
 } > "$output/build-$architecture.txt"
-(cd "$output" && sha256sum "$(basename "$binary")" "sing-box_${version}_openwrt_${architecture}.apk" "sing-box_${version}_openwrt_${architecture}.ipk")
+(cd "$output" && sha256sum "$(basename "$binary")" "sing-box_${version}_${architecture}.apk" "sing-box_${version}_${architecture}.ipk")

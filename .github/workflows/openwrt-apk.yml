@@ -96,7 +96,7 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: sing-box_${{ steps.vars.outputs.version }}_openwrt_${{ matrix.architecture }}
+          name: sing-box_${{ steps.vars.outputs.version }}_${{ matrix.architecture }}
           path: |
             dist/*.apk
             dist/*.ipk
