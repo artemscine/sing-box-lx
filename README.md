@@ -71,7 +71,7 @@ its README — [on GitHub](https://github.com/SagerNet/sing-box/blob/main/README
 |---|---|---|---|---|
 | **`chain` outbound** — [015](SPECS/FEATURES/015-CHAIN/FEATURE.md) | `type: chain` | A virtual multi-hop path assembled at runtime from groups and nodes; groups are never copied, hops are runtime links; transparent `direct`, automatic MTU for tunnel links, `strip` / `rewrite` | `with_lx_chain` | live stand on real hops; WireGuard links on device pending |
 | **DNS server group** — [013](SPECS/FEATURES/013-DNS_GROUP/FEATURE.md) | `dns.servers[].type: group` | One DNS server over several: `stable` / `fastest` / `parallel` on a TTL model, fan-out with a budget, `survival` visibility | — | shipped; field run pending |
-| **Load balancing and failover** — [007](SPECS/FEATURES/007-URLTEST_BALANCE/FEATURE.md) | `urltest` with `mode: round_robin`, `balancer{…}`; `least_test` reacts to live dial errors | Round-robin pool with lazy health checks and sticky slots; dead-path errors penalise a node and retry through the best candidate | `with_lx_command` (only `GetPool`) | device-verified on a real multi-node pool |
+| **Load balancing and failover** — [007](SPECS/FEATURES/007-URLTEST_BALANCE/FEATURE.md) | `urltest` with `mode: round_robin`, `balancer{…}`, `mode: failover`; `least_test` reacts to live dial errors | Round-robin pool with lazy health checks and sticky slots; failover holds the working node until it fails; dead-path errors penalise a node and retry through the best candidate | `with_lx_command` (only `GetPool`) | device-verified on a real multi-node pool |
 | **Protocol sniffers** — [016](SPECS/FEATURES/016-SNIFF/FEATURE.md) | `sniff` action names `wireguard`, `openvpn`, `ike`, `tailscale`, `sip` | Recognise other devices' VPN tunnels and calls behind a router by the shape of the first packet; sits ahead of upstream's uTP sniffer that mislabelled WireGuard as bittorrent | — | shipped; router run pending |
 
 ### Platform and operations
@@ -79,7 +79,7 @@ its README — [on GitHub](https://github.com/SagerNet/sing-box/blob/main/README
 | Feature | Config surface | What you get | Build tag | Status |
 |---|---|---|---|---|
 | **Observability** — [006](SPECS/FEATURES/006-OBSERVABILITY/FEATURE.md) | libbox `CommandClient` extensions | `URLTestOutbound`, `GetRules`, `GetGroups`, `GetOutbounds`, `GetPool`, `GetDNSGroups`, `GetRunningConfig`, `GetChains`, `SubscribeDNSQueries`, `Connection.detourList` — what the Android client lives on | `with_lx_command` | shipped, consumed by LxBox |
-| **Idle-suspend (energy)** — [008](SPECS/FEATURES/008-ENERGY/FEATURE.md) | `route.lx_idle_suspend` / `lx_idle_suspend_reachable` / `lx_idle_teardown`, `urltest.passive_check` | Three sleep levels for idle WireGuard/AWG endpoints: battery, heat and RAM on multi-node mobile profiles | `with_lx_idle_suspend` (baked into the AAR) | device-verified: RSS −31 % |
+| **Idle-suspend (energy)** — [008](SPECS/FEATURES/008-ENERGY/FEATURE.md) | `route.lx_idle_suspend` / `lx_idle_suspend_reachable` / `lx_idle_teardown`, `urltest` `mode: failover` | Three sleep levels for idle WireGuard/AWG endpoints: battery, heat and RAM on multi-node mobile profiles | `with_lx_idle_suspend` (baked into the AAR) | device-verified: RSS −31 % |
 | **`lxd` daemon** — [014](SPECS/FEATURES/014-LXD_DAEMON/FEATURE.md) | `sing-box lxd` subcommand | The core in-process behind a management channel that outlives every config change: gRPC + admin-REST on one port, `apply` with automatic rollback, mTLS with enrolment, service install, host telemetry | `with_lxd` | device-verified on macOS; OpenWrt installer scripts field-tested |
 
 > **Not supported, by design:** server halves of the above; Xray's post-quantum REALITY **signatures** (`pqv` / ML-DSA-65) and `spiderX` — a different mechanism from the key exchange, absent from sing-box; the `edge`, `ios`, `android`, `360`, `qq` fingerprints against Xray ≥ v26.9.8 (no upstream preset carries the hybrid share, Xray has the same boundary; substituting the fingerprint is the applications' job).
@@ -112,7 +112,7 @@ make -f Makefile.lx lx-check        # validate the sample configs in lx-test/con
 
 ## Configuration — a quick tour
 
-One snippet per feature. Field tables, defaults and every option — **[docs-lx/lx-config.md](docs-lx/lx-config.md)** ([RU](docs-lx/lx-config.ru.md)); wire-level detail for XHTTP, AmneziaWG and MASQUE — **[docs-lx/lx-protocols-transports.md](docs-lx/lx-protocols-transports.md)** ([RU](docs-lx/lx-protocols-transports.ru.md)).
+One snippet per feature. Field tables, defaults and every option — **[docs-lx/lx-config.md](docs-lx/lx-config.md)** ([RU](docs-lx/lx-config.ru.md)); wire-level detail for XHTTP, AmneziaWG and MASQUE — **[docs-lx/protocols-transports.md](docs-lx/protocols-transports.md)** ([RU](docs-lx/protocols-transports.ru.md)).
 
 ### XHTTP transport
 
@@ -133,7 +133,7 @@ One snippet per feature. Field tables, defaults and every option — **[docs-lx/
 }
 ```
 
-`id`/`ip`/`ib` and an explicit `i1` are mutually exclusive. `ip=quic` sends two out-of-order fragmented QUIC Initials and is the profile proven against a live DPI; `dns`/`stun`/`sip` are correct requests kept for providers whose DPI only checks well-formedness. Reference — [lx-protocols-transports.md §2](docs-lx/lx-protocols-transports.md#2-amneziawg-203x-awg2-awg3) ([RU](docs-lx/lx-protocols-transports.ru.md#2-amneziawg-203x-awg2-awg3)) · [masquerade examples](SPECS/TASKS/009-WIRESOCK_MASQUERADE_PROFILES/EXAMPLES.md).
+`id`/`ip`/`ib` and an explicit `i1` are mutually exclusive. `ip=quic` sends one QUIC Initial carrying a whole browser ClientHello (`ib=chrome` — Chrome 155 with Chrome's own frame layout; `ib=chrome-full` — the same with the ML-KEM key share in one Initial above the MTU) and is the profile proven against a live DPI; `dns`/`stun`/`sip` are correct requests kept for providers whose DPI only checks well-formedness. Reference — [protocols-transports.md §2](docs-lx/protocols-transports.md#2-amneziawg-203x-awg2-awg3) ([RU](docs-lx/protocols-transports.ru.md#2-amneziawg-203x-awg2-awg3)) · [masquerade examples](SPECS/TASKS/009-WIRESOCK_MASQUERADE_PROFILES/EXAMPLES.md).
 
 ### MASQUE outbound (Cloudflare WARP)
 
@@ -149,7 +149,7 @@ One snippet per feature. Field tables, defaults and every option — **[docs-lx/
 }
 ```
 
-Key material comes from the WARP device registration done by the client. Not to be confused with the AWG *masquerade* sugar above — same word, different feature. Reference — [lx-protocols-transports.md §3](docs-lx/lx-protocols-transports.md#3-masque-outbound-connect-ip--warp) ([RU](docs-lx/lx-protocols-transports.ru.md#3-masque-outbound-connect-ip--warp)).
+Key material comes from the WARP device registration done by the client. Not to be confused with the AWG *masquerade* sugar above — same word, different feature. Reference — [protocols-transports.md §3](docs-lx/protocols-transports.md#3-masque-outbound-connect-ip--warp) ([RU](docs-lx/protocols-transports.ru.md#3-masque-outbound-connect-ip--warp)).
 
 ### REALITY: fingerprint and `key_share`
 
@@ -198,7 +198,7 @@ Tunnel links get their MTU lowered automatically; the path shows in `detourList`
 
 ### Balancing, energy, sniffers
 
-No new types — a few fields on existing ones: `urltest` `mode: round_robin` + `balancer{…}` and `passive_check` ([lx-config.md §3](docs-lx/lx-config.md#3-round_robin-load-balancing-spec-019), [RU](docs-lx/lx-config.ru.md#3-балансировка-нагрузки-round_robin-spec-019)); `route.lx_idle_*` sleep levels ([lx-energy.md](docs-lx/lx-energy.md), [RU](docs-lx/lx-energy.ru.md)); protocol names in the `sniff` action and `protocol` rules ([lx-sniff.md](docs-lx/lx-sniff.md), [RU](docs-lx/lx-sniff.ru.md)).
+No new types — a few fields on existing ones: `urltest` `mode: round_robin` + `balancer{…}` and `mode: failover` ([lx-config.md §3](docs-lx/lx-config.md#3-urltest-node-selection-modes-spec-019--116), [RU](docs-lx/lx-config.ru.md#3-режимы-выбора-узла-в-urltest-spec-019--116)); `route.lx_idle_*` sleep levels ([lx-energy.md](docs-lx/lx-energy.md), [RU](docs-lx/lx-energy.ru.md)); protocol names in the `sniff` action and `protocol` rules ([lx-sniff.md](docs-lx/lx-sniff.md), [RU](docs-lx/lx-sniff.ru.md)).
 
 ---
 
@@ -280,8 +280,10 @@ Everything downstream is either a new file or a seam marked `// lx`; `grep -rn "
 |---|---|
 | Upstream | [SagerNet/sing-box](https://github.com/SagerNet/sing-box) · [docs](https://sing-box.sagernet.org/) |
 | Config overview | [docs-lx/lx-config.md](docs-lx/lx-config.md) ([RU](docs-lx/lx-config.ru.md)) — every field of every feature, with examples |
-| Protocols & transports | [docs-lx/lx-protocols-transports.md](docs-lx/lx-protocols-transports.md) ([RU](docs-lx/lx-protocols-transports.ru.md)) — XHTTP, AmneziaWG, MASQUE in depth |
-| Energy guide | [docs-lx/lx-energy.md](docs-lx/lx-energy.md) ([RU](docs-lx/lx-energy.ru.md)) — idle-suspend levels, `passive_check`, tuning |
+| Protocols & transports | [docs-lx/protocols-transports.md](docs-lx/protocols-transports.md) ([RU](docs-lx/protocols-transports.ru.md)) — XHTTP, AmneziaWG, MASQUE, REALITY, VLESS `encryption` in depth |
+| How the Xray protocols work | [docs-lx/xray-protocols-explained.md](docs-lx/xray-protocols-explained.md) ([RU](docs-lx/xray-protocols-explained.ru.md)) — REALITY, Vision, XHTTP, VLESS `encryption`: mechanics, the fork's implementation, differences from vanilla, Xray ↔ sing-box-lx examples |
+| How AmneziaWG works | [docs-lx/amneziawg-explained.md](docs-lx/amneziawg-explained.md) ([RU](docs-lx/amneziawg-explained.ru.md)) — three obfuscation layers, the MTU budget, the graft in the wireguard-go fork, `awg.conf` ↔ endpoint example |
+| Energy guide | [docs-lx/lx-energy.md](docs-lx/lx-energy.md) ([RU](docs-lx/lx-energy.ru.md)) — idle-suspend levels, `mode: failover`, tuning |
 | Sniffers | [docs-lx/lx-sniff.md](docs-lx/lx-sniff.md) ([RU](docs-lx/lx-sniff.ru.md)) |
 | `lxd` operator's guide | [docs-lx/lxd-daemon.md](docs-lx/lxd-daemon.md) ([RU](docs-lx/lxd-daemon.ru.md)) |
 | Observability API | [docs-lx/lxd-grpc-api.md](docs-lx/lxd-grpc-api.md) ([RU](docs-lx/lxd-grpc-api.ru.md)) — the contract clients speak, gRPC daemon and Android AAR alike |
