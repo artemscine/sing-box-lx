@@ -1,0 +1,476 @@
+From: FiyeroT <me@fiyero.xyz>
+Subject: [PATCH] urltest: ordered reserve members for the Podkop profile
+
+Adapted from podkop-engine commit c89d4587dc22b6668e88061eb169ae4d98a1a153
+(GPL-3.0-or-later). Primary members win over reserves; reserves are chosen
+in list order and a recovered primary wins again. Retain lx lifecycle,
+reachability and reactive dial machinery. No option means original lx.
+
+---
+diff --git a/option/group.go b/option/group.go
+index 71ac4709a..2b7a4645c 100644
+--- a/option/group.go
++++ b/option/group.go
+@@ -9,7 +9,9 @@ type SelectorOutboundOptions struct {
+ }
+ 
+ type URLTestOutboundOptions struct {
+-	Outbounds                 []string           `json:"outbounds" reference:"outbound"`
++	Outbounds []string `json:"outbounds" reference:"outbound"`
++	// lx: Podkop profile — ordered reserve members, adapted from podkop-engine.
++	Fallbacks                 []string           `json:"fallbacks,omitempty" reference:"outbound"`
+ 	URL                       string             `json:"url,omitempty"`
+ 	Interval                  badoption.Duration `json:"interval,omitempty"`
+ 	Tolerance                 uint16             `json:"tolerance,omitempty"`
+diff --git a/protocol/group/urltest.go b/protocol/group/urltest.go
+index 5176c26db..97632e1ea 100644
+--- a/protocol/group/urltest.go
++++ b/protocol/group/urltest.go
+@@ -37,10 +37,12 @@ var (
+ 
+ type URLTest struct {
+ 	outbound.Adapter
+-	ctx                          context.Context
+-	outbound                     adapter.OutboundManager
+-	connection                   adapter.ConnectionManager
+-	logger                       log.ContextLogger
++	ctx        context.Context
++	outbound   adapter.OutboundManager
++	connection adapter.ConnectionManager
++	logger     log.ContextLogger
++	// lx: Podkop profile — primary members precede the reserve members.
++	primaryCount                 int
+ 	tags                         []string
+ 	link                         string
+ 	interval                     time.Duration
+@@ -70,13 +72,19 @@ func NewURLTest(ctx context.Context, router adapter.Router, logger log.ContextLo
+ 	if warnFailoverTolerance(failover, options) {
+ 		logger.Warn("urltest: tolerance is ignored in failover mode")
+ 	}
++	// lx: Podkop profile — FiyeroT/podkop-engine ordered fallbacks.
++	tags, err := fallbackTags(options)
++	if err != nil {
++		return nil, err
++	}
+ 	outbound := &URLTest{
+-		Adapter:                      outbound.NewAdapter(C.TypeURLTest, tag, []string{N.NetworkTCP, N.NetworkUDP}, options.Outbounds),
++		Adapter:                      outbound.NewAdapter(C.TypeURLTest, tag, []string{N.NetworkTCP, N.NetworkUDP}, tags),
+ 		ctx:                          ctx,
+ 		outbound:                     service.FromContext[adapter.OutboundManager](ctx),
+ 		connection:                   service.FromContext[adapter.ConnectionManager](ctx),
+ 		logger:                       logger,
+-		tags:                         options.Outbounds,
++		tags:                         tags,
++		primaryCount:                 len(options.Outbounds),
+ 		link:                         options.URL,
+ 		interval:                     time.Duration(options.Interval),
+ 		tolerance:                    options.Tolerance,
+@@ -85,7 +93,7 @@ func NewURLTest(ctx context.Context, router adapter.Router, logger log.ContextLo
+ 		balancer:                     balancer,
+ 		failover:                     failover,
+ 	}
+-	if len(outbound.tags) == 0 {
++	if len(options.Outbounds) == 0 {
+ 		return nil, E.New("missing tags")
+ 	}
+ 	return outbound, nil
+@@ -109,6 +117,10 @@ func (s *URLTest) Start(stage adapter.StartStage, scope *adapter.Scope) error {
+ 		group.balancer = s.balancer // lx: SPEC 019 v2 — health-check drives the pool through it
+ 		group.groupTag = s.Tag()    // lx: SPEC 020 — probe gating needs the group's own tag
+ 		group.failover = s.failover // lx: SPEC 116
++		// lx: Podkop profile — zero keeps the original selection policy.
++		if s.primaryCount < len(s.tags) {
++			group.fallbackStart = s.primaryCount
++		}
+ 		if s.balancer != nil {
+ 			// lx: SPEC 020 — a pool rebuild changes the active routing tree; invalidate
+ 			// the router's reachable cache. ctx captured here has the invalidator.
+@@ -126,6 +138,10 @@ func (s *URLTest) Start(stage adapter.StartStage, scope *adapter.Scope) error {
+ }
+ 
+ func (s *URLTest) Now() string {
++	// lx: Podkop profile — read selection under the same lock as fallback updates.
++	if s.group.hasFallbacks() {
++		return s.group.fallbackNow()
++	}
+ 	// lx: SPEC 019 — balanced modes have no single "current" node; report the last picked tag.
+ 	if s.balancer != nil {
+ 		return s.group.lastSelected.Load()
+@@ -210,6 +226,10 @@ func (s *URLTest) References() []string {
+ 	if group == nil {
+ 		return nil
+ 	}
++	// lx: Podkop profile — fallback selections are synchronized with reactive failover.
++	if group.hasFallbacks() {
++		return group.fallbackReferences()
++	}
+ 	var references []string
+ 	if group.selectedOutboundTCP != nil {
+ 		references = append(references, group.selectedOutboundTCP.Tag())
+@@ -308,6 +328,10 @@ func (s *URLTest) DialContext(ctx context.Context, network string, destination M
+ 		return s.group.interruptGroup.NewConn(conn, interrupt.IsExternalConnectionFromContext(ctx)), nil
+ 	}
+ 	s.logger.ErrorContext(ctx, err)
++	// lx: Podkop profile — caller cancellation says nothing about a member.
++	if s.group.hasFallbacks() && ctx.Err() != nil {
++		return nil, err
++	}
+ 	// lx: SPEC 019 v2 — in round_robin a dial error must NOT touch the pool: the cause is
+ 	// unknown (dead node vs. dead destination vs. local network drop). Only the health-check
+ 	// changes pool membership. least_test keeps the upstream behaviour (drop the history).
+@@ -392,6 +416,7 @@ type URLTestGroup struct {
+ 	balancer                     *balancer                 // lx: SPEC 019 v2 — round_robin pool; nil for least_test
+ 	groupTag                     string                    // lx: SPEC 020 — set by URLTest.Start (probe gating)
+ 	failover                     bool                      // lx: SPEC 116 — set by URLTest.Start
++	fallbackStart                int                       // lx: Podkop profile — first ordered reserve member
+ 	reachability                 adapter.ReachabilityReporter
+ 	// lx: SPEC 054 — penalty failover (least_test): tag → счётчик отказов «путь
+ 	// мёртв»; сброс только доказательством жизни (успешный дайл / ответ на пробу).
+@@ -494,6 +519,10 @@ func (g *URLTestGroup) Close() error {
+ }
+ 
+ func (g *URLTestGroup) Select(network string) (adapter.Outbound, bool) {
++	// lx: Podkop profile — primary members win over any reserve.
++	if g.hasFallbacks() {
++		return g.fallbackSelect(network, "")
++	}
+ 	var minDelay uint16
+ 	var minOutbound adapter.Outbound
+ 	switch network {
+@@ -738,6 +767,11 @@ func (g *URLTestGroup) performUpdateCheck() {
+ // performSelectionUpdate is upstream performUpdateCheck with the failover reselect flag:
+ // reselect drops the hold and picks the fastest node (SPEC 116); other modes ignore it.
+ func (g *URLTestGroup) performSelectionUpdate(reselect bool) {
++	// lx: Podkop profile — use a synchronized selection for the reserve policy.
++	if g.hasFallbacks() {
++		g.fallbackUpdate()
++		return
++	}
+ 	g.updateAccess.Lock()
+ 	defer g.updateAccess.Unlock()
+ 	var (
+diff --git a/protocol/group/urltest_fallback_lx.go b/protocol/group/urltest_fallback_lx.go
+new file mode 100644
+index 000000000..36be9c38a
+--- /dev/null
++++ b/protocol/group/urltest_fallback_lx.go
+@@ -0,0 +1,177 @@
++package group
++
++// lx: Podkop profile — ordered fallbacks, adapted from FiyeroT/podkop-engine
++// commit c89d4587dc22b6668e88061eb169ae4d98a1a153 (GPL-3.0-or-later).
++// Primary members compete by delay; only when none responds does the first
++// responding reserve win. A recovered primary takes precedence again.
++
++import (
++	"context"
++	"errors"
++	"net"
++	"os"
++
++	"github.com/sagernet/sing-box/adapter"
++	C "github.com/sagernet/sing-box/constant"
++	"github.com/sagernet/sing-box/option"
++	E "github.com/sagernet/sing/common/exceptions"
++	N "github.com/sagernet/sing/common/network"
++)
++
++func fallbackTags(options option.URLTestOutboundOptions) ([]string, error) {
++	if len(options.Fallbacks) == 0 {
++		return options.Outbounds, nil
++	}
++	if len(options.Outbounds) == 0 {
++		return nil, E.New("urltest: missing primary outbounds")
++	}
++	if options.Mode != "" && options.Mode != C.URLTestModeLeastTest {
++		return nil, E.New("urltest: fallbacks require mode: least_test")
++	}
++	seen := make(map[string]bool)
++	tags := append([]string{}, options.Outbounds...)
++	for _, tag := range tags {
++		seen[tag] = true
++	}
++	for _, tag := range options.Fallbacks {
++		if seen[tag] {
++			return nil, E.New("urltest: fallback ", tag, " is already listed")
++		}
++		seen[tag] = true
++		tags = append(tags, tag)
++	}
++	return tags, nil
++}
++
++func (g *URLTestGroup) hasFallbacks() bool {
++	return g.fallbackStart > 0 && g.fallbackStart < len(g.outbounds)
++}
++
++func (g *URLTestGroup) fallbackCurrent(network string) adapter.Outbound {
++	g.access.Lock()
++	defer g.access.Unlock()
++	if network == N.NetworkTCP {
++		return g.selectedOutboundTCP
++	}
++	return g.selectedOutboundUDP
++}
++
++func (g *URLTestGroup) fallbackSelect(network, excluded string) (adapter.Outbound, bool) {
++	current := g.fallbackCurrent(network)
++	var best adapter.Outbound
++	var delay uint16
++	// A reserve does not seed the primary members' tolerance.
++	for _, member := range g.outbounds[:g.fallbackStart] {
++		tag := RealTag(g.outbound, member)
++		if tag == excluded || !supportsNetwork(member, network) {
++			continue
++		}
++		history := g.history.LoadURLTestHistory(tag)
++		if history == nil {
++			continue
++		}
++		if member == current {
++			best, delay = member, history.Delay
++			break
++		}
++	}
++	for _, member := range g.outbounds[:g.fallbackStart] {
++		tag := RealTag(g.outbound, member)
++		if tag == excluded || !supportsNetwork(member, network) {
++			continue
++		}
++		history := g.history.LoadURLTestHistory(tag)
++		if history != nil && (best == nil || int(delay) > int(history.Delay)+int(g.tolerance)) {
++			best, delay = member, history.Delay
++		}
++	}
++	if best != nil {
++		return best, true
++	}
++	for _, member := range g.outbounds[g.fallbackStart:] {
++		tag := RealTag(g.outbound, member)
++		if tag != excluded && supportsNetwork(member, network) && g.history.LoadURLTestHistory(tag) != nil {
++			return member, true
++		}
++	}
++	// Preserve the held choice when everything is down; cold start uses the
++	// first member, as in upstream. Neither is a confirmed retry candidate.
++	if current != nil && RealTag(g.outbound, current) != excluded {
++		return current, false
++	}
++	for _, member := range g.outbounds {
++		if RealTag(g.outbound, member) != excluded && supportsNetwork(member, network) {
++			return member, false
++		}
++	}
++	return nil, false
++}
++
++func (g *URLTestGroup) fallbackUpdate() {
++	g.updateAccess.Lock()
++	defer g.updateAccess.Unlock()
++	tcp, tcpAlive := g.fallbackSelect(N.NetworkTCP, "")
++	udp, udpAlive := g.fallbackSelect(N.NetworkUDP, "")
++	g.access.Lock()
++	changed, interrupt := false, false
++	if tcp != nil && (g.selectedOutboundTCP == nil || tcpAlive) && tcp != g.selectedOutboundTCP {
++		interrupt = g.selectedOutboundTCP != nil
++		g.selectedOutboundTCP = tcp
++		changed = true
++	}
++	if udp != nil && (g.selectedOutboundUDP == nil || udpAlive) && udp != g.selectedOutboundUDP {
++		interrupt = interrupt || g.selectedOutboundUDP != nil
++		g.selectedOutboundUDP = udp
++		changed = true
++	}
++	g.access.Unlock()
++	if interrupt {
++		g.interruptGroup.Interrupt(g.interruptExternalConnections)
++	}
++	if changed {
++		invalidateReachability(g.ctx)
++		g.history.NotifyUpdated()
++	}
++}
++
++func (g *URLTestGroup) fallbackNow() string {
++	if selected := g.fallbackCurrent(N.NetworkTCP); selected != nil {
++		return selected.Tag()
++	}
++	if selected := g.fallbackCurrent(N.NetworkUDP); selected != nil {
++		return selected.Tag()
++	}
++	selected, _ := g.fallbackSelect(N.NetworkTCP, "")
++	if selected != nil {
++		return selected.Tag()
++	}
++	return ""
++}
++
++func (g *URLTestGroup) fallbackReferences() []string {
++	g.access.Lock()
++	defer g.access.Unlock()
++	var tags []string
++	if g.selectedOutboundTCP != nil {
++		tags = append(tags, g.selectedOutboundTCP.Tag())
++	}
++	if g.selectedOutboundUDP != nil && g.selectedOutboundUDP != g.selectedOutboundTCP {
++		tags = append(tags, g.selectedOutboundUDP.Tag())
++	}
++	return tags
++}
++
++// A server-only protocol's failed TCP dial is evidence about the proxy path,
++// including an actively refused connection. Destination-dialing protocols keep
++// lx's existing timeout/unreachable classifier. Caller cancellation is ignored.
++func fallbackServerFailure(member adapter.Outbound, err error) bool {
++	if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) || errors.Is(err, os.ErrClosed) {
++		return false
++	}
++	switch member.Type() {
++	case C.TypeVLESS, C.TypeVMess, C.TypeTrojan, C.TypeShadowsocks, C.TypeShadowTLS,
++		C.TypeHysteria, C.TypeHysteria2, C.TypeTUIC, C.TypeAnyTLS, C.TypeNaive:
++		return true
++	}
++	return false
++}
+diff --git a/protocol/group/urltest_fallback_lx_test.go b/protocol/group/urltest_fallback_lx_test.go
+new file mode 100644
+index 000000000..640fedf57
+--- /dev/null
++++ b/protocol/group/urltest_fallback_lx_test.go
+@@ -0,0 +1,85 @@
++package group
++
++import (
++	"context"
++	"testing"
++	"time"
++
++	"github.com/sagernet/sing-box/adapter"
++	C "github.com/sagernet/sing-box/constant"
++	"github.com/sagernet/sing-box/option"
++	"github.com/sagernet/sing/common/logger"
++	M "github.com/sagernet/sing/common/metadata"
++	N "github.com/sagernet/sing/common/network"
++)
++
++func fallbackFixture(t *testing.T) (*URLTestGroup, []*failoverNode) {
++	nodes := []*failoverNode{newFailoverNode("primary", 0), newFailoverNode("backup-one", 0), newFailoverNode("backup-two", 0)}
++	g := newFailoverTestGroup(t, nodes...)
++	g.failover = false
++	g.fallbackStart = 1
++	for index, node := range nodes {
++		g.history.StoreURLTestHistory(node.Tag(), &adapter.URLTestHistory{Time: time.Now(), Delay: uint16(300 - index*100)})
++	}
++	return g, nodes
++}
++
++func TestFallbackPriorityAndRecovery(t *testing.T) {
++	g, nodes := fallbackFixture(t)
++	g.performUpdateCheck()
++	assertSelected(t, g, N.NetworkTCP, nodes[0])
++	g.history.DeleteURLTestHistory(nodes[0].Tag())
++	g.performUpdateCheck()
++	assertSelected(t, g, N.NetworkTCP, nodes[1]) // second reserve is faster, but order wins
++	g.history.DeleteURLTestHistory(nodes[1].Tag())
++	g.performUpdateCheck()
++	assertSelected(t, g, N.NetworkTCP, nodes[2])
++	g.history.StoreURLTestHistory(nodes[0].Tag(), &adapter.URLTestHistory{Time: time.Now(), Delay: 900})
++	g.performUpdateCheck()
++	assertSelected(t, g, N.NetworkTCP, nodes[0]) // author behaviour: first successful probe
++}
++
++func TestFallbackReactiveRetryUsesReserveOrder(t *testing.T) {
++	g, nodes := fallbackFixture(t)
++	g.performUpdateCheck()
++	nodes[0].setErr(context.DeadlineExceeded)
++	g.history.DeleteURLTestHistory(nodes[0].Tag())
++	conn, selected, ok := g.penaltyFailoverDial(context.Background(), N.NetworkTCP, M.ParseSocksaddr(nodes[1].addr), nodes[0], context.DeadlineExceeded)
++	if !ok || selected != nodes[1] {
++		t.Fatal("reactive retry did not use first reserve")
++	}
++	conn.Close()
++	assertSelected(t, g, N.NetworkTCP, nodes[1])
++}
++
++func TestFallbackConfigValidation(t *testing.T) {
++	for _, options := range []option.URLTestOutboundOptions{
++		{Outbounds: []string{"a"}, Fallbacks: []string{"a"}},
++		{Outbounds: []string{"a"}, Fallbacks: []string{"b", "b"}},
++		{Fallbacks: []string{"b"}},
++		{Outbounds: []string{"a"}, Fallbacks: []string{"b"}, Mode: C.URLTestModeFailover},
++		{Outbounds: []string{"a"}, Fallbacks: []string{"b"}, Mode: C.URLTestModeRoundRobin},
++	} {
++		if _, err := NewURLTest(context.Background(), nil, logger.NOP(), "auto", options); err == nil {
++			t.Fatal("invalid reserve configuration accepted")
++		}
++	}
++	created, err := NewURLTest(context.Background(), nil, logger.NOP(), "auto", option.URLTestOutboundOptions{Outbounds: []string{"a"}, Fallbacks: []string{"b", "c"}})
++	if err != nil {
++		t.Fatal(err)
++	}
++	g := created.(*URLTest)
++	if len(g.All()) != 3 || len(g.Dependencies()) != 3 {
++		t.Fatal("reserves must be started and reported")
++	}
++}
++
++func TestFallbackProbesAllMembers(t *testing.T) {
++	g, nodes := fallbackFixture(t)
++	if _, err := g.urlTest(context.Background(), true); err != nil {
++		t.Fatal(err)
++	}
++	for _, node := range nodes {
++		assertDials(t, node, 1)
++	}
++}
+diff --git a/protocol/group/urltest_penalty_lx.go b/protocol/group/urltest_penalty_lx.go
+index d618f6ea0..a74559db9 100644
+--- a/protocol/group/urltest_penalty_lx.go
++++ b/protocol/group/urltest_penalty_lx.go
+@@ -130,6 +130,14 @@ func (g *URLTestGroup) penaltyEmergency(network string) bool {
+ // penaltyBest — двухуровневое ранжирование (штрафы ↑, задержка ↑) среди узлов
+ // с history, минус исключённый тег. nil, если кандидатов нет.
+ func (g *URLTestGroup) penaltyBest(network string, excludeTag string) adapter.Outbound {
++	// lx: Podkop profile — reserve ordering also applies to the reactive retry.
++	if g.hasFallbacks() {
++		best, alive := g.fallbackSelect(network, excludeTag)
++		if alive {
++			return best
++		}
++		return nil
++	}
+ 	var best adapter.Outbound
+ 	var bestPenalty int64
+ 	var bestDelay uint16
+@@ -158,6 +166,10 @@ func (g *URLTestGroup) penaltyBest(network string, excludeTag string) adapter.Ou
+ // selectPenaltyAware — Select с учётом штрафов: в аварийном режиме — двухуровневое
+ // ранжирование; иначе — апстримный Select как есть. Используется performUpdateCheck.
+ func (g *URLTestGroup) selectPenaltyAware(network string) (adapter.Outbound, bool) {
++	// lx: Podkop profile — reserves never compete with a responding primary.
++	if g.hasFallbacks() {
++		return g.fallbackSelect(network, "")
++	}
+ 	if g.balancer == nil && g.penaltyEmergency(network) {
+ 		if best := g.penaltyBest(network, ""); best != nil {
+ 			return best, true
+@@ -170,6 +182,11 @@ func (g *URLTestGroup) selectPenaltyAware(network string) (adapter.Outbound, boo
+ // selectedOutbound* (он может указывать на оштрафованного лучшего), обычный —
+ // апстримная семантика (кеш, иначе Select).
+ func (g *URLTestGroup) pickForDial(network string) adapter.Outbound {
++	// lx: Podkop profile — pass over failed members before the background update.
++	if g.hasFallbacks() {
++		selected, _ := g.fallbackSelect(network, "")
++		return selected
++	}
+ 	if g.balancer == nil && g.penaltyEmergency(network) {
+ 		if best := g.penaltyBest(network, ""); best != nil {
+ 			return best
+@@ -220,7 +237,7 @@ func (g *URLTestGroup) moveSelection(network string, detour adapter.Outbound) {
+ // Возвращает (conn, узел, true) при успехе fallback'а; иначе (nil, nil, false)
+ // и вызывающий отдаёт исходную ошибку приложению.
+ func (g *URLTestGroup) penaltyFailoverDial(ctx context.Context, network string, destination M.Socksaddr, failed adapter.Outbound, dialErr error) (net.Conn, adapter.Outbound, bool) {
+-	if g.balancer != nil || !isPathDeadDialError(dialErr) {
++	if g.balancer != nil || (!isPathDeadDialError(dialErr) && !(g.hasFallbacks() && fallbackServerFailure(failed, dialErr))) {
+ 		return nil, nil, false
+ 	}
+ 	g.penaltyAdd(RealTag(g.outbound, failed))
