@@ -19,14 +19,13 @@ from the inbound's options (adapter.InboundListenAddress). Chaining to
 another local inbound, through a proxy outbound, is untouched.
 ---
  adapter/inbound.go         |   8 +++
- protocol/direct/inbound.go |  11 +++
- route/route.go             |  55 +++++++++++++++
- route/route_loop_test.go   | 136 +++++++++++++++++++++++++++++++++++++
+ protocol/direct/inbound.go |  11 ++++
+ route/route.go             |  55 ++++++++++++++++++
+ route/route_loop_test.go   | 136 +++++++++++++++++++++++++++++++++++++++++++++
  4 files changed, 210 insertions(+)
- create mode 100644 route/route_loop_test.go
 
 diff --git a/adapter/inbound.go b/adapter/inbound.go
-index ae1067d9a..f3ee22532 100644
+index b081ddc94..4cc05632d 100644
 --- a/adapter/inbound.go
 +++ b/adapter/inbound.go
 @@ -21,6 +21,14 @@ type Inbound interface {
@@ -45,7 +44,7 @@ index ae1067d9a..f3ee22532 100644
  	Inbound
  	ConnectionHandler
 diff --git a/protocol/direct/inbound.go b/protocol/direct/inbound.go
-index 34ebbb15d..f82be0024 100644
+index 603ba6882..3c24e2cbb 100644
 --- a/protocol/direct/inbound.go
 +++ b/protocol/direct/inbound.go
 @@ -3,6 +3,7 @@ package direct
@@ -74,8 +73,8 @@ index 34ebbb15d..f82be0024 100644
  	inbound.listener = listener.New(listener.Options{
  		Context:           ctx,
  		Logger:            logger,
-@@ -77,6 +82,12 @@ func (i *Inbound) Start(stage adapter.StartStage) error {
- 	return i.listener.Start()
+@@ -82,6 +87,12 @@ func (i *Inbound) Start(stage adapter.StartStage, scope *adapter.Scope) error {
+ 	return nil
  }
  
 +// ListenAddress reports the address this inbound listens on, which it also hands out as the
@@ -88,10 +87,10 @@ index 34ebbb15d..f82be0024 100644
  	i.udpNat.Purge()
  }
 diff --git a/route/route.go b/route/route.go
-index 6c99cc23b..bce492074 100644
+index 93dc7597d..a467630c6 100644
 --- a/route/route.go
 +++ b/route/route.go
-@@ -160,6 +160,10 @@ func (r *Router) routeConnection(ctx context.Context, conn net.Conn, metadata ad
+@@ -176,6 +176,10 @@ func (r *Router) routeConnection(ctx context.Context, conn net.Conn, metadata ad
  		selectedOutbound = defaultOutbound
  	}
  
@@ -102,7 +101,7 @@ index 6c99cc23b..bce492074 100644
  	for _, buffer := range buffers {
  		conn = bufio.NewCachedConn(conn, buffer)
  	}
-@@ -291,6 +295,10 @@ func (r *Router) routePacketConnection(ctx context.Context, conn N.PacketConn, m
+@@ -310,6 +314,10 @@ func (r *Router) routePacketConnection(ctx context.Context, conn N.PacketConn, m
  		}
  		selectedOutbound = defaultOutbound
  	}
@@ -113,7 +112,7 @@ index 6c99cc23b..bce492074 100644
  	for _, buffer := range packetBuffers {
  		conn = bufio.NewCachedPacketConn(conn, buffer.Buffer, buffer.Destination)
  		N.PutPacketBuffer(buffer)
-@@ -595,6 +603,53 @@ func (r *Router) prepareMatchMetadata(ctx context.Context, metadata *adapter.Inb
+@@ -609,6 +617,53 @@ func (r *Router) prepareMatchMetadata(ctx context.Context, metadata *adapter.Inb
  	return nil
  }
  
@@ -309,6 +308,3 @@ index 000000000..5beea226b
 +	require.False(t, r.wouldLoopToInbound(&adapter.InboundContext{Inbound: "any4", Destination: M.ParseSocksaddr("8.8.8.8:53"), OriginDestination: accepted}, direct))
 +	require.False(t, r.wouldLoopToInbound(&adapter.InboundContext{Inbound: "any4", Destination: M.ParseSocksaddr("192.168.1.1:5353"), OriginDestination: accepted}, direct))
 +}
--- 
-2.53.0
-
