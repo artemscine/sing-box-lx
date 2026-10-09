@@ -155,7 +155,7 @@ index 36be9c38a..7dcbdb276 100644
  	if current != nil && RealTag(g.outbound, current) != excluded {
 diff --git a/protocol/group/urltest_fallback_recovery_lx.go b/protocol/group/urltest_fallback_recovery_lx.go
 new file mode 100644
-index 000000000..16488c8fb
+index 000000000..9a738d036
 --- /dev/null
 +++ b/protocol/group/urltest_fallback_recovery_lx.go
 @@ -0,0 +1,94 @@
@@ -247,7 +247,7 @@ index 000000000..16488c8fb
 +	r.access.Lock()
 +	defer r.access.Unlock()
 +	member := r.members[tag]
-+	return member == nil || (member.successes >= r.successes && !member.firstAnswer.IsZero() && now.Sub(member.firstAnswer) >= r.delay)
++	return member == nil || (member.successes >= r.successes && !member.firstAnswer.IsZero() && now.Sub(member.firstAnswer) >= r.delay && member.observedAt.Sub(member.firstAnswer) >= r.delay)
 +}
 +
 +func (g *URLTestGroup) fallbackRecovered(tag string) bool {
@@ -255,10 +255,10 @@ index 000000000..16488c8fb
 +}
 diff --git a/protocol/group/urltest_fallback_recovery_lx_test.go b/protocol/group/urltest_fallback_recovery_lx_test.go
 new file mode 100644
-index 000000000..47a10b760
+index 000000000..f22f971d7
 --- /dev/null
 +++ b/protocol/group/urltest_fallback_recovery_lx_test.go
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,107 @@
 +package group
 +
 +import (
@@ -349,6 +349,21 @@ index 000000000..47a10b760
 +	}
 +	if newFallbackRecovery(nil) != nil {
 +		t.Fatal("confirmation must be opt-in")
++	}
++}
++
++func TestFallbackRecoveryNeedsProofAcrossHealthyWindow(t *testing.T) {
++	delay := badoption.Duration(time.Minute)
++	r := newFallbackRecovery(&option.URLTestFallbackRecoveryOptions{Successes: 1, MinHealthyTime: &delay})
++	base := time.Now().Add(-5 * time.Minute)
++	r.members["a"] = &fallbackRecoveryMember{failuresAt: base}
++	r.answered("a", base.Add(time.Second), time.Second)
++	if r.recovered("a", time.Now()) {
++		t.Fatal("elapsed time without another proof is not continuous recovery")
++	}
++	r.answered("a", base.Add(61*time.Second), time.Second)
++	if !r.recovered("a", time.Now()) {
++		t.Fatal("proof spanning the healthy window was not admitted")
 +	}
 +}
 diff --git a/protocol/group/urltest_penalty_lx.go b/protocol/group/urltest_penalty_lx.go
