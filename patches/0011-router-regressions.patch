@@ -69,7 +69,7 @@ diff --git a/dns/transport/https_podkop_test.go b/dns/transport/https_podkop_tes
 new file mode 100644
 --- /dev/null
 +++ b/dns/transport/https_podkop_test.go
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,82 @@
 +package transport
 +
 +import (
@@ -82,6 +82,7 @@ new file mode 100644
 +	"testing"
 +	"time"
 +
++	"github.com/sagernet/sing-box/adapter"
 +	"github.com/sagernet/sing-box/dns"
 +	"github.com/sagernet/sing-box/log"
 +	M "github.com/sagernet/sing/common/metadata"
@@ -115,7 +116,11 @@ new file mode 100644
 +			defer server.Close()
 +			destination, _ := url.Parse(server.URL)
 +			transport := NewHTTPSRaw(dns.TransportAdapter{}, log.NewNOPFactory().Logger(), N.SystemDialer, destination, http.Header{}, M.ParseSocksaddr(destination.Host), nil)
-+			defer transport.Close()
++			scope := adapter.NewScope(context.Background(), log.NewNOPFactory().Logger())
++			defer scope.Close()
++			if err := transport.Start(adapter.StartStateStart, scope); err != nil {
++				t.Fatal(err)
++			}
 +			original := transport.transport
 +			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 +			defer cancel()
