@@ -2,6 +2,12 @@
 
 > 🌐 English version: **[lx-config.md](lx-config.md)**.
 
+> 🧭 **Где что искать.** Документация форка — три уровня, по вопросу читателя:
+> [lx-config](lx-config.ru.md) — что есть в форке и как включить;
+> [protocols-transports](protocols-transports.ru.md) — каждое поле, тип, дефолт, текст ошибки;
+> [xray-protocols-explained](xray-protocols-explained.ru.md) и [amneziawg-explained](amneziawg-explained.ru.md) —
+> как устроено, почему, как сделано у нас и чем отличается от ванили.
+
 `sing-box-lx` — это upstream [sing-box](https://github.com/SagerNet/sing-box) плюс небольшой набор **клиентских** фич, каждая за своим build-тегом:
 
 | Фича | Build-тег | Где живёт в конфиге | Входит в |
@@ -35,8 +41,8 @@ GC-нагрева / RAM, ~8 МБ каждый там, где `BatchSize=128` —
 (члены пула, выбранный узел, final); `lx.wg.idle_teardown` — третий уровень:
 сколько эндпоинт может *спать* до полного сноса (Close, освобождается и gVisor
 netstack; пробуждение = rebuild ~0.5–1 с; дефолт = reachable-окну);
-`urltest.passive_check` — пропуск health-проб,
-пока свежий успешный TCP-дайл доказывает живость узла. Полная энергомодель,
+`urltest` `mode: failover` — держаться за рабочий узел и пробовать только его
+(одно пробуждение в `interval` вместо N). Полная энергомодель,
 таймлайны и рекомендованный мобильный конфиг — в **[lx-energy.ru.md](lx-energy.ru.md)**.
 
 > ⚠️ Все ключи/UUID ниже — **заглушки**. Никогда не коммитьте реальные приватные ключи / pre-shared-ключи в репозиторий.
@@ -49,7 +55,7 @@ netstack; пробуждение = rebuild ~0.5–1 с; дефолт = reachable
 - [2. AmneziaWG 2.0/3.x (AWG2, AWG3)](#2-amneziawg-203x-awg2-awg3)
   - [Пример — AmneziaWG 3.1 endpoint (экспорт Amnezia `amnezia-awg2`)](#пример--amneziawg-31-endpoint-экспорт-amnezia-amnezia-awg2)
   - [Пример — AmneziaWG 2.0 endpoint](#пример--amneziawg-20-endpoint)
-- [3. Балансировка нагрузки round_robin (SPEC 019)](#3-балансировка-нагрузки-round_robin-spec-019)
+- [3. Режимы выбора узла в urltest (SPEC 019 / 116)](#3-режимы-выбора-узла-в-urltest-spec-019--116)
   - [Поля (на `urltest` outbound)](#поля-на-urltest-outbound)
   - [Привязка по слот-хешу](#привязка-по-слот-хешу)
   - [Пример — urltest с round_robin](#пример--urltest-с-round_robin)
@@ -258,9 +264,7 @@ masquerade-сахар `id`/`ip`/`ib`, VLESS `encryption` и `round_robin`-бал
       "outbounds": ["xhttp-out", "proxy-b", "proxy-c", "proxy-d", "proxy-e"],
       "url": "https://www.gstatic.com/generate_204",
       "interval": "15m",
-      "passive_check": false,                   // по умолчанию: false. Свежий успешный TCP-дайл
-                                                //   считается доказательством живости (< interval) — пробы молчат
-      "mode": "round_robin",                    // по умолчанию: least_test. least_test | round_robin
+      "mode": "round_robin",                    // по умолчанию: least_test. least_test | round_robin | failover
       "balancer": {                             // допустим только с mode: round_robin
         "pool": 3,                              // по умолчанию: 3. 0/отсутствие → 3; эффективный = min(pool, #outbounds)
         "pool_tolerance": 0,                    // по умолчанию: 0 (мс). 0 = держать живой пул; >0 = топ-N по задержке с гистерезисом
@@ -274,7 +278,7 @@ masquerade-сахар `id`/`ip`/`ib`, VLESS `encryption` и `round_robin`-бал
 ```
 
 > **Счёт полей:** 26 XHTTP + 30 AmneziaWG (вкл. `id`/`ip`/`ib` и 9 ключей AWG 3.x) + 1 VLESS (`encryption`) +
-> 6 `urltest` (`mode`, `passive_check` + `balancer{pool,pool_tolerance,sticky_hash}`) + 7 `lx` (6 `lx.wg` + `lx.masque.idle_timeout`). Взаимоисключающие / игнорируемые поля помечены
+> 5 `urltest` (`mode` + `balancer{pool,pool_tolerance,sticky_hash}`) + 7 `lx` (6 `lx.wg` + `lx.masque.idle_timeout`). Взаимоисключающие / игнорируемые поля помечены
 > в комментариях выше; разделы ниже дают семантику каждого поля, подводные камни и статус
 > живой проверки.
 
@@ -294,8 +298,8 @@ v1-клиентом** — каждое v2-поле (размещение session
 
 > **📖 Полный справочник полей — все 26 ключей XHTTP, их дефолты, семантика пула `xmux`,
 > формы записи диапазонов и таблица диагностики — в
-> [lx-protocols-transports.ru.md §1](lx-protocols-transports.ru.md#1-xhttp-транспорт)**
-> ([EN](lx-protocols-transports.md#1-xhttp-transport)).
+> [protocols-transports.ru.md §1](protocols-transports.ru.md#1-xhttp-транспорт)**
+> ([EN](protocols-transports.md#1-xhttp-transport)).
 
 ### Пример — VLESS + XHTTP + Reality
 
@@ -328,9 +332,9 @@ v1-клиентом** — каждое v2-поле (размещение session
 
 AWG — это WireGuard + обфускация против DPI. Настраивается как обычный sing-box **`wireguard` endpoint** с дополнительными «поднятыми» полями. С `with_awg` они передаются на устройство; конфиг без единого AWG-поля — обычный WireGuard endpoint (поведение байт-в-байт как в upstream).
 
-AWG2 = поля AWG1 **плюс** CPS-пакеты `I1`–`I5`. И клиент, и сервер должны работать на AmneziaWG с **совпадающими** параметрами (I-пакеты — это конфигурация, не согласуются). Более дружелюбный способ задать первую приманку — WireSock-style сахар `id`/`ip`/`ib`, который генерирует `i1` за вас — см. [полный справочник](lx-protocols-transports.ru.md#25-сахар-маскировки-id--ip--ib).
+AWG2 = поля AWG1 **плюс** CPS-пакеты `I1`–`I5`. И клиент, и сервер должны работать на AmneziaWG с **совпадающими** параметрами (I-пакеты — это конфигурация, не согласуются). Более дружелюбный способ задать первую приманку — WireSock-style сахар `id`/`ip`/`ib`, который генерирует `i1` за вас — см. [полный справочник](protocols-transports.ru.md#25-сахар-маскировки-id--ip--ib).
 
-AWG3 (amneziawg-go v3.0/v3.1, контейнер Amnezia `amnezia-awg2` с `protocol_version` 3.x) добавляет защиту заголовка (`header_protection_key` — серверный, обязан совпасть), паддинг содержимого, случайные хвосты, отключённые cookie и диапазонные тайминги, плюс диапазонный `persistent_keepalive_interval`. Все поля на корне endpoint, как и AWG2 — [справочник §2.10](lx-protocols-transports.ru.md#210-awg-3x-защита-заголовка-паддинг-хвосты-тайминги).
+AWG3 (amneziawg-go v3.0/v3.1, контейнер Amnezia `amnezia-awg2` с `protocol_version` 3.x) добавляет защиту заголовка (`header_protection_key` — серверный, обязан совпасть), паддинг содержимого, случайные хвосты, отключённые cookie и диапазонные тайминги, плюс диапазонный `persistent_keepalive_interval`. Все поля на корне endpoint, как и AWG2 — [справочник §2.10](protocols-transports.ru.md#210-awg-3x-защита-заголовка-паддинг-хвосты-тайминги).
 
 AWG-поля сидят в **корне** endpoint (ни одно не на peer), зеркаля секцию `[Interface]`
 из `awg-quick` `.conf`: junk (`jc`/`jmin`/`jmax`), паддинг handshake (`s1`–`s4`),
@@ -343,8 +347,8 @@ WireGuard, потому что `s4` паддит каждый data-пакет �
 > формат CPS-тегов, сахар маскировки `id`/`ip`/`ib` (четыре профиля, какой выбрать, что
 > попадает на провод), математика бюджета MTU, маппинг `awg.conf` 1:1 и дословные ошибки
 > валидации — в
-> [lx-protocols-transports.ru.md §2](lx-protocols-transports.ru.md#2-amneziawg-203x-awg2-awg3)**
-> ([EN](lx-protocols-transports.md#2-amneziawg-203x-awg2-awg3)).
+> [protocols-transports.ru.md §2](protocols-transports.ru.md#2-amneziawg-203x-awg2-awg3)**
+> ([EN](protocols-transports.md#2-amneziawg-203x-awg2-awg3)).
 
 ### Пример — AmneziaWG 3.1 endpoint (экспорт Amnezia `amnezia-awg2`)
 
@@ -410,24 +414,42 @@ WireGuard, потому что `s4` паддит каждый data-пакет �
 
 ---
 
-## 3. Балансировка нагрузки round_robin (SPEC 019)
+## 3. Режимы выбора узла в urltest (SPEC 019 / 116)
 
 Upstream `urltest` всегда выбирает единственную ноду с наименьшей задержкой. sing-box-lx добавляет
-**режим** `round_robin`, который ротирует трафик по фиксированному **пулу** нод — спроектирован
-масштабироваться на большие списки (health-check проходит только пул, а не каждую ноду). Выбор
-происходит один раз на соединение; UDP/QUIC-сессия остаётся на своей ноде. С опущенным `mode` (или
-`least_test`) outbound ведёт себя как upstream, и `balancer` задавать нельзя.
+к нему два **режима**:
 
-Метод CommandClient `GetPool` (см. [§8](#8-наблюдаемость-расширения-commandclient)) за тегом
-`with_lx_command`; сами поля конфига `mode`/`balancer` доступны всегда.
+| `mode` | Выбор | Переключение | Что пробуется каждый `interval` |
+|---|---|---|---|
+| `least_test` (по умолчанию) | самый быстрый | как только кто-то быстрее на `tolerance` | все узлы |
+| `round_robin` | пул живых | ротация по пулу | члены пула (лениво) |
+| `failover` | самый быстрый на момент выбора | **только при отказе текущего**; следующий — снова самый быстрый | **только текущий узел** |
 
-### Поля (на `urltest` outbound)
+Общие upstream-поля (`url`, `interval`, `idle_timeout`, `interrupt_exist_connections`) не меняются; поля
+`mode`/`balancer` доступны без build-тега, метод CommandClient `GetPool` (см.
+[§8](#8-наблюдаемость-расширения-commandclient)) — за тегом `with_lx_command`.
+
+### 3.1 Общие поля
 
 | Ключ | Тип | По умолчанию | Значение |
 |------|-----|--------------|----------|
-| `mode` | string | `least_test` | `least_test` (поведение upstream) \| `round_robin` (ротация по пулу). `least_connection` отклоняется (round_robin статистически равномерен) |
-| `passive_check` | bool | `false` | свежий успешный TCP-дайл считается доказательством живости, пока свеж (< `interval`): `least_test` пропускает целые циклы перетеста, пока выбранный узел пассивно подтверждён; `round_robin` (только при `pool_tolerance: 0`) считает подтверждённые слоты живыми без проб. Цена: более лежалые числа задержек в UI. См. [lx-energy.ru.md](lx-energy.ru.md) |
-| `balancer` | object | — | параметры round_robin; **допустим только с `mode: round_robin`** (иначе ошибка). Upstream-поле `tolerance` в round_robin игнорируется — используйте `pool_tolerance` (предупреждение при старте подсказывает это, пока `pool_tolerance` не задан) |
+| `mode` | string | `least_test` | `least_test` (поведение upstream) \| `round_robin` (ротация по пулу) \| `failover` (держаться за рабочий узел до его отказа, SPEC 116). `least_connection` отклоняется (round_robin статистически равномерен) |
+| `balancer` | object | — | параметры round_robin; **допустим только с `mode: round_robin`** (иначе ошибка старта). См. [§3.3](#33-round_robin--пул-с-закреплением) |
+
+### 3.2 least_test — самый быстрый узел
+
+Поведение upstream: каждый `interval` пробуются все узлы, группа переключается, как только другой
+узел быстрее текущего больше чем на `tolerance` мс (по умолчанию `50`). С опущенным `mode` outbound
+ведёт себя так же. Штрафной failover SPEC 054 на ошибках дайла класса «путь мёртв» действует и здесь
+([SPEC 054](../SPECS/TASKS/054-URLTEST_PENALTY_FAILOVER/SPEC.md)).
+
+### 3.3 round_robin — пул с закреплением
+
+`round_robin` ротирует трафик по фиксированному **пулу** нод — спроектирован масштабироваться на
+большие списки (health-check проходит только пул, а не каждую ноду). Выбор происходит один раз на
+соединение; UDP/QUIC-сессия остаётся на своей ноде. Upstream-поле `tolerance` в round_robin
+игнорируется — используйте `pool_tolerance` (предупреждение при старте подсказывает это, пока
+`pool_tolerance` не задан).
 
 #### Поля `balancer`
 
@@ -443,7 +465,7 @@ Upstream `urltest` всегда выбирает единственную нод
 > **включена**). Используйте явный sentinel **`["none"]`**; это единственный допустимый элемент,
 > когда он присутствует (смешивание `none` с реальным компонентом — ошибка).
 
-### Привязка по слот-хешу
+#### Привязка по слот-хешу
 
 `sticky_hash` привязывает поток к фиксированному **индексу слота** — `slot[hash(key) % pool]`
 (FNV-64a по конкатенированным компонентам) — а не к позиции ноды. Слоты никогда не двигаются, и
@@ -455,7 +477,7 @@ Upstream `urltest` всегда выбирает единственную нод
 `domain` в ключе — ключ только из `source_ip`/`dest_ip`/`dest_port` может схлопнуться в `""` для
 нерезолвленного назначения, приклеив все потоки одного источника к единственному слоту.
 
-### Пример — urltest с round_robin
+#### Пример — urltest с round_robin
 
 ```jsonc
 {
@@ -480,6 +502,60 @@ Upstream `urltest` всегда выбирает единственную нод
 
 **📖 [Полный справочник →](../docs/configuration/outbound/urltest.md)** — каждое поле, семантика
 липкости по компонентам, правила наполнения/поддержки пула и советы по тюнингу.
+
+### 3.4 failover — держаться до отказа
+
+**Выбор.** Группа берёт самый быстрый узел на момент выбора, без `tolerance`; порядок в списке
+`outbounds` роли не играет.
+
+**Удержание.** Пока узел работает, группа остаётся на нём, даже если другой стал быстрее. Каждый
+`interval` пробуется **только удерживаемый узел** — одна проба вместо N, остальные узлы спят.
+
+**Отказ.** Два вида:
+
+- проба удерживаемого узла не ответила → полный прогон по всем узлам → самый быстрый из живых;
+- дайл через него упал с ошибкой «путь мёртв» → штраф и fallback-дайл SPEC 054 → выбор переезжает
+  без `Interrupt`.
+
+После переезда новый узел становится удерживаемым.
+
+**Ручной тест.** Тест группы из UI, CLI (`sing-box api group urltest <tag>`) или Clash API всегда
+`force`: пробует все узлы и перевыбирает самый быстрый. Это единственный способ вернуться на
+лучший узел, пока удерживаемый жив.
+
+**Что не действует.** `tolerance` — игнорируется, при старте выводится предупреждение; `balancer` —
+ошибка старта.
+
+Задержки невыбранных узлов в UI — на момент последнего полного прогона.
+
+#### Пример — urltest с failover
+
+```jsonc
+{
+  "type": "urltest",
+  "tag": "auto",
+  "outbounds": ["proxy-a", "proxy-b", "proxy-c", "proxy-d", "proxy-e"],
+  "url": "https://www.gstatic.com/generate_204",
+  "interval": "15m",
+  "mode": "failover"
+  // tolerance не задаётся: переключений «по скорости» нет (ненулевое значение — предупреждение)
+  // balancer не задаётся: с failover это ошибка старта
+}
+```
+
+Когда выбирать: мобильные профили и случаи, где стабильность узла важнее всегда актуального самого
+быстрого (см. [lx-energy.ru.md §6](lx-energy.ru.md#6-urltest-пробы-и-как-они-научены-не-мешать)).
+
+### 3.5 Сравнение и выбор режима
+
+| Что важнее | Режим |
+|---|---|
+| минимум переключений и одна проба в `interval` | `failover` |
+| распределение нагрузки по нескольким узлам | `round_robin` |
+| всегда самый быстрый узел любой ценой проб | `least_test` |
+
+По энергии: `least_test` будит все узлы каждый `interval`, `round_robin` — только пул (при `pool_tolerance: 0`), `failover` —
+один узел; подробнее в [lx-energy.ru.md §6](lx-energy.ru.md#6-urltest-пробы-и-как-они-научены-не-мешать).
 
 ---
 
@@ -513,8 +589,8 @@ outbound'а.
 > (`cloudflare` vs `standard`), формат ключевого материала, гайд `vhttp` h3-vs-h2,
 > поведение idle-suspend/keepalive, валидация при старте, таблица миграции с до-SPEC-062
 > и частые грабли — в
-> [lx-protocols-transports.ru.md §3](lx-protocols-transports.ru.md#3-masque-outbound-connect-ip--warp)**
-> ([EN](lx-protocols-transports.md#3-masque-outbound-connect-ip--warp)).
+> [protocols-transports.ru.md §3](protocols-transports.ru.md#3-masque-outbound-connect-ip--warp)**
+> ([EN](protocols-transports.md#3-masque-outbound-connect-ip--warp)).
 
 ### Пример — WARP (дефолты: `vhttp: auto`)
 
@@ -573,8 +649,8 @@ QUIC не несёт TLS поверх TCP вовсе.
 > **Статус.** Device-verified end-to-end на реальных Wi-Fi и LTE — `warp=on`, реальный трафик на
 > обоих `h3` и `h2`, idle-suspend + самовосстановление подтверждены на устройстве.
 
-**📖 [Полный справочник →](lx-protocols-transports.ru.md#3-masque-outbound-connect-ip--warp)**
-([EN](lx-protocols-transports.md#3-masque-outbound-connect-ip--warp)) — полная таблица
+**📖 [Полный справочник →](protocols-transports.ru.md#3-masque-outbound-connect-ip--warp)**
+([EN](protocols-transports.md#3-masque-outbound-connect-ip--warp)) — полная таблица
 параметров, матрица профилей, формат ключевого материала, валидация при старте и частые грабли.
 
 ---
@@ -763,7 +839,7 @@ mlkem768x25519plus.<native|xorpub|random>.<0rtt|1rtt>[.<padding>…].<ключ>[
   `disabled` выставляет `SetEndpointEnabled` (SPEC 106, ниже;
   см. [lx-energy.ru.md §12](lx-energy.ru.md#12-ручной-переключатель-spec-106)).
 - **`GetPool(groupTag)`** — прочитать текущий пул ротации round_robin группы `urltest`, слот за
-  слотом (SPEC 019; см. [§3](#3-балансировка-нагрузки-round_robin-spec-019)).
+  слотом (SPEC 019; см. [§3](#3-режимы-выбора-узла-в-urltest-spec-019--116)).
 - **`GetDNSGroups()`** — live-состояние каждого DNS-сервера `group` (SPEC 035; см.
   [§5](#5-группа-dns-серверов-spec-033035)): по каждому члену `clean` / `liveErrors` /
   `lastErrorAgeMs` / `liveWins` / `current`.

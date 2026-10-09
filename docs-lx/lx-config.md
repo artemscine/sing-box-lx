@@ -2,6 +2,12 @@
 
 > 🌐 Русская версия: **[lx-config.ru.md](lx-config.ru.md)**.
 
+> 🧭 **Where to look.** The fork's documentation has three levels, by the reader's question:
+> [lx-config](lx-config.md) — what the fork has and how to enable it;
+> [protocols-transports](protocols-transports.md) — every field, type, default, error text;
+> [xray-protocols-explained](xray-protocols-explained.md) and [amneziawg-explained](amneziawg-explained.md) —
+> how it works, why, how the fork does it and how it differs from vanilla.
+
 `sing-box-lx` is upstream [sing-box](https://github.com/SagerNet/sing-box) plus a small set of **client-side** features, each gated behind a build tag:
 
 | Feature | Build tag | Where it lives in config | Included in |
@@ -36,8 +42,8 @@ second, longer idle window after which even *reachable* endpoints (pool members,
 the selected node, final) suspend; `lx.wg.idle_teardown` — the third level:
 how long an endpoint may *sleep* before a full teardown (Close, the gVisor
 netstack goes too; wake = rebuild ~0.5–1 s; defaults to the reachable window);
-`urltest.passive_check` — skip health probes
-while a recent successful TCP dial proves the node alive. The full energy model,
+`urltest` `mode: failover` — hold the working node and probe only it (one
+wake per `interval` instead of N). The full energy model,
 timelines and the recommended mobile configuration live in
 **[lx-energy.md](lx-energy.md)**.
 
@@ -51,7 +57,7 @@ timelines and the recommended mobile configuration live in
 - [2. AmneziaWG 2.0/3.x (AWG2, AWG3)](#2-amneziawg-203x-awg2-awg3)
   - [Example — AmneziaWG 3.1 endpoint (Amnezia `amnezia-awg2` export)](#example--amneziawg-31-endpoint-amnezia-amnezia-awg2-export)
   - [Example — AmneziaWG 2.0 endpoint](#example--amneziawg-20-endpoint)
-- [3. round_robin load balancing (SPEC 019)](#3-round_robin-load-balancing-spec-019)
+- [3. urltest node selection modes (SPEC 019 / 116)](#3-urltest-node-selection-modes-spec-019--116)
   - [Fields (on a `urltest` outbound)](#fields-on-a-urltest-outbound)
   - [Slot-hash binding](#slot-hash-binding)
   - [Example — urltest with round_robin](#example--urltest-with-round_robin)
@@ -260,9 +266,7 @@ you need and read its section below. Each comment shows the **default** and the 
       "outbounds": ["xhttp-out", "proxy-b", "proxy-c", "proxy-d", "proxy-e"],
       "url": "https://www.gstatic.com/generate_204",
       "interval": "15m",
-      "passive_check": false,                   // default: false. Recent successful TCP dial counts
-                                                //   as proof of life while fresh (< interval) — probes stay quiet
-      "mode": "round_robin",                    // default: least_test. least_test | round_robin
+      "mode": "round_robin",                    // default: least_test. least_test | round_robin | failover
       "balancer": {                             // only valid with mode: round_robin
         "pool": 3,                              // default: 3. 0/omitted → 3; effective = min(pool, #outbounds)
         "pool_tolerance": 0,                    // default: 0 (ms). 0 = keep-live-fill; >0 = top-N-by-delay hysteresis
@@ -276,7 +280,7 @@ you need and read its section below. Each comment shows the **default** and the 
 ```
 
 > **Field count:** 26 XHTTP + 30 AmneziaWG (incl. `id`/`ip`/`ib` and the 9 AWG 3.x keys) + 1 VLESS (`encryption`) +
-> 6 `urltest` (`mode`, `passive_check` + `balancer{pool,pool_tolerance,sticky_hash}`) + 7 `lx` (6 `lx.wg` + `lx.masque.idle_timeout`). Mutually-exclusive / ignored fields are
+> 5 `urltest` (`mode` + `balancer{pool,pool_tolerance,sticky_hash}`) + 7 `lx` (6 `lx.wg` + `lx.masque.idle_timeout`). Mutually-exclusive / ignored fields are
 > labelled inline above; the sections below give the per-field semantics, gotchas and live
 > verification status.
 
@@ -290,8 +294,8 @@ A minimal `transport` block is just `"type": "xhttp"` (mode `auto`); the [exampl
 
 > **📖 The full field reference — all 26 XHTTP keys, their defaults, the `xmux` pool
 > semantics, range value forms and a troubleshooting table — is in
-> [lx-protocols-transports.md §1](lx-protocols-transports.md#1-xhttp-transport)**
-> ([RU](lx-protocols-transports.ru.md#1-xhttp-транспорт)).
+> [protocols-transports.md §1](protocols-transports.md#1-xhttp-transport)**
+> ([RU](protocols-transports.ru.md#1-xhttp-транспорт)).
 
 ### Example — VLESS + XHTTP + Reality
 
@@ -324,9 +328,9 @@ A minimal `transport` block is just `"type": "xhttp"` (mode `auto`); the [exampl
 
 AWG is WireGuard + DPI-evasion obfuscation. It is configured as a normal sing-box **`wireguard` endpoint** with extra promoted fields. With `with_awg` these are pushed to the device; a config without any AWG field is a plain WireGuard endpoint (byte-identical to upstream behavior).
 
-AWG2 = AWG1 fields **plus** the CPS packets `I1`–`I5`. Both client and server must run AmneziaWG with **matching** parameters (the I-packets are configuration, not negotiated). For a friendlier way to set the first decoy, the WireSock-style `id`/`ip`/`ib` sugar generates `i1` for you — see the [full reference](lx-protocols-transports.md#25-masquerade-sugar-id--ip--ib).
+AWG2 = AWG1 fields **plus** the CPS packets `I1`–`I5`. Both client and server must run AmneziaWG with **matching** parameters (the I-packets are configuration, not negotiated). For a friendlier way to set the first decoy, the WireSock-style `id`/`ip`/`ib` sugar generates `i1` for you — see the [full reference](protocols-transports.md#25-masquerade-sugar-id--ip--ib).
 
-AWG3 (amneziawg-go v3.0/v3.1, Amnezia's `amnezia-awg2` container with `protocol_version` 3.x) adds header protection (`header_protection_key` — server-side, must match), content padding, random trailers, disabled cookies and ranged timing overrides, plus a ranged `persistent_keepalive_interval`. All are endpoint-root fields like the AWG2 ones — [reference §2.10](lx-protocols-transports.md#210-awg-3x-header-protection-padding-trailers-timings).
+AWG3 (amneziawg-go v3.0/v3.1, Amnezia's `amnezia-awg2` container with `protocol_version` 3.x) adds header protection (`header_protection_key` — server-side, must match), content padding, random trailers, disabled cookies and ranged timing overrides, plus a ranged `persistent_keepalive_interval`. All are endpoint-root fields like the AWG2 ones — [reference §2.10](protocols-transports.md#210-awg-3x-header-protection-padding-trailers-timings).
 
 The AWG fields sit at the endpoint **root** (none on a peer), mirroring an `awg-quick`
 `.conf` `[Interface]` section: junk (`jc`/`jmin`/`jmax`), handshake padding (`s1`–`s4`),
@@ -338,8 +342,8 @@ packet — the core defaults to `1280` when you set `s4` and omit `mtu`.
 > and default, the CPS tag format, the `id`/`ip`/`ib` masquerade sugar (four profiles,
 > which to pick, what reaches the wire), the MTU budget math, the `awg.conf` 1:1 mapping
 > and the verbatim validation errors — is in
-> [lx-protocols-transports.md §2](lx-protocols-transports.md#2-amneziawg-203x-awg2-awg3)**
-> ([RU](lx-protocols-transports.ru.md#2-amneziawg-203x-awg2-awg3)).
+> [protocols-transports.md §2](protocols-transports.md#2-amneziawg-203x-awg2-awg3)**
+> ([RU](protocols-transports.ru.md#2-amneziawg-203x-awg2-awg3)).
 
 ### Example — AmneziaWG 3.1 endpoint (Amnezia `amnezia-awg2` export)
 
@@ -405,24 +409,42 @@ The runtime is backed by `Leadaxe/wireguard-go` (sagernet/wireguard-go + Amnezia
 
 ---
 
-## 3. round_robin load balancing (SPEC 019)
+## 3. urltest node selection modes (SPEC 019 / 116)
 
-Upstream `urltest` always selects the single lowest-delay node. sing-box-lx adds a
-`round_robin` **mode** that rotates traffic over a fixed-size **pool** of nodes — built to
-scale to large node lists (only the pool is health-checked, not every node). Selection
-happens once per connection; a UDP/QUIC session stays on its node. With `mode` omitted (or
-`least_test`) the outbound behaves exactly like upstream and `balancer` must not be set.
+Upstream `urltest` always selects the single lowest-delay node. sing-box-lx adds two
+**modes** next to it:
 
-The `GetPool` CommandClient method (see [§8](#8-observability-commandclient-extensions)) is
-behind `with_lx_command`; the `mode`/`balancer` config fields themselves are always available.
+| `mode` | Selection | Switches | Probed each `interval` |
+|---|---|---|---|
+| `least_test` (default) | the fastest node | as soon as another one is faster by `tolerance` | every node |
+| `round_robin` | a pool of live nodes | rotation over the pool | pool members (lazily) |
+| `failover` | the fastest node at selection time | **only when the current one fails**; the next one is again the fastest | **only the current node** |
 
-### Fields (on a `urltest` outbound)
+The common upstream fields (`url`, `interval`, `idle_timeout`, `interrupt_exist_connections`) are
+unchanged; `mode`/`balancer` need no build tag; the `GetPool` CommandClient method (see
+[§8](#8-observability-commandclient-extensions)) is behind `with_lx_command`.
+
+### 3.1 Common fields
 
 | Key | Type | Default | Meaning |
 |-----|------|---------|---------|
-| `mode` | string | `least_test` | `least_test` (upstream behaviour) \| `round_robin` (rotate over the pool). `least_connection` is rejected (round_robin is statistically even) |
-| `passive_check` | bool | `false` | a recent successful TCP dial counts as proof of life while fresh (< `interval`): `least_test` skips whole re-test cycles while the selected node is passively confirmed; `round_robin` (only with `pool_tolerance: 0`) treats confirmed slots as live without probing. Cost: staler delay numbers in the UI. See [lx-energy.md](lx-energy.md) |
-| `balancer` | object | — | round_robin parameters; **only valid with `mode: round_robin`** (error otherwise). The upstream `tolerance` field is ignored in round_robin — use `pool_tolerance` instead (a startup warning points this out while `pool_tolerance` is unset) |
+| `mode` | string | `least_test` | `least_test` (upstream behaviour) \| `round_robin` (rotate over the pool) \| `failover` (hold the working node until it fails, SPEC 116). `least_connection` is rejected (round_robin is statistically even) |
+| `balancer` | object | — | round_robin parameters; **only valid with `mode: round_robin`** (startup error otherwise). See [§3.3](#33-round_robin--pool-with-stickiness) |
+
+### 3.2 least_test — fastest node
+
+Upstream behaviour: every `interval` all nodes are probed, and the group switches as soon as
+another node is faster than the current one by more than `tolerance` ms (default `50`). With
+`mode` omitted the outbound behaves the same. The SPEC 054 penalty failover on "path is dead"
+dial errors applies here too ([SPEC 054](../SPECS/TASKS/054-URLTEST_PENALTY_FAILOVER/SPEC.md)).
+
+### 3.3 round_robin — pool with stickiness
+
+`round_robin` rotates traffic over a fixed-size **pool** of nodes — built to scale to large
+node lists (only the pool is health-checked, not every node). Selection happens once per
+connection; a UDP/QUIC session stays on its node. The upstream `tolerance` field is ignored in
+round_robin — use `pool_tolerance` instead (a startup warning points this out while
+`pool_tolerance` is unset).
 
 #### `balancer` fields
 
@@ -438,7 +460,7 @@ behind `with_lx_command`; the `mode`/`balancer` config fields themselves are alw
 > i.e. stickiness **on**). Use the explicit **`["none"]`** sentinel; it is the only element
 > allowed when present (mixing `none` with a real component is an error).
 
-### Slot-hash binding
+#### Slot-hash binding
 
 `sticky_hash` binds a flow to a fixed **slot index** — `slot[hash(key) % pool]` (FNV-64a over
 the concatenated components) — not to a node position. Slots never move and a replacement node
@@ -450,7 +472,7 @@ only literal-IP destinations). For domain-based traffic keep `domain` in the key
 `source_ip`/`dest_ip`/`dest_port` can collapse to `""` for an unresolved destination, sticking
 every flow of one source to a single slot.
 
-### Example — urltest with round_robin
+#### Example — urltest with round_robin
 
 ```jsonc
 {
@@ -474,6 +496,60 @@ every flow of one source to a single slot.
 
 **📖 [Full reference →](../docs/configuration/outbound/urltest.md)** — every field, the per-component
 sticky semantics, the pool fill/maintain rules and tuning tips.
+
+### 3.4 failover — hold until it fails
+
+**Selection.** The group takes the fastest node at the moment of choice, without `tolerance`;
+the order of the `outbounds` list does not matter.
+
+**Hold.** While the node works the group stays on it, even if another one becomes faster. Each
+`interval` probes **only the held node** — one probe instead of N; the other nodes sleep.
+
+**Failure.** Two kinds:
+
+- the held node fails a probe → a full run over every node → the fastest live one;
+- a dial through it fails with a "path is dead" error → SPEC 054 penalty and fallback dial → the
+  selection moves without `Interrupt`.
+
+After the move the new node becomes the held one.
+
+**Manual test.** A group test from the UI, CLI (`sing-box api group urltest <tag>`) or Clash API
+is always `force`: it probes every node and re-selects the fastest. This is the only way back to
+the best node while the held one is alive.
+
+**What does not apply.** `tolerance` is ignored (a startup warning says so); `balancer` is a
+startup error.
+
+Delays of non-held nodes in the UI are as of the last full run.
+
+#### Example — urltest with failover
+
+```jsonc
+{
+  "type": "urltest",
+  "tag": "auto",
+  "outbounds": ["proxy-a", "proxy-b", "proxy-c", "proxy-d", "proxy-e"],
+  "url": "https://www.gstatic.com/generate_204",
+  "interval": "15m",
+  "mode": "failover"
+  // no tolerance: there are no speed-based switches (a non-zero value logs a warning)
+  // no balancer: with failover it is a startup error
+}
+```
+
+When to pick it: mobile profiles and cases where staying on a stable node matters more than an
+always-current fastest one (see [lx-energy.md §6](lx-energy.md#6-urltest-probes-and-how-they-were-taught-to-stay-quiet)).
+
+### 3.5 Choosing a mode
+
+| What matters more | Mode |
+|---|---|
+| fewest switches and one probe per `interval` | `failover` |
+| spreading load over several nodes | `round_robin` |
+| always the fastest node, whatever the probe cost | `least_test` |
+
+On energy: `least_test` wakes every node each `interval`, `round_robin` only the pool (with `pool_tolerance: 0`), `failover`
+one node; details in [lx-energy.md §6](lx-energy.md#6-urltest-probes-and-how-they-were-taught-to-stay-quiet).
 
 ---
 
@@ -507,8 +583,8 @@ block.
 > matrix (`cloudflare` vs `standard`), key-material format, `vhttp` h3-vs-h2 guidance,
 > idle-suspend/keepalive behaviour, start-time validation, the pre-SPEC-062 migration
 > table and common footguns — is in
-> [lx-protocols-transports.md §3](lx-protocols-transports.md#3-masque-outbound-connect-ip--warp)**
-> ([RU](lx-protocols-transports.ru.md#3-masque-outbound-connect-ip--warp)).
+> [protocols-transports.md §3](protocols-transports.md#3-masque-outbound-connect-ip--warp)**
+> ([RU](protocols-transports.ru.md#3-masque-outbound-connect-ip--warp)).
 
 ### Example — WARP (defaults: `vhttp: auto`)
 
@@ -565,8 +641,8 @@ QUIC does not carry TLS over TCP at all.
 > **Status.** Device-verified end-to-end on real Wi-Fi and LTE — `warp=on`, real traffic on both
 > `h3` and `h2`, idle-suspend + self-healing reconnect confirmed on-device.
 
-**📖 [Full reference →](lx-protocols-transports.md#3-masque-outbound-connect-ip--warp)**
-([RU](lx-protocols-transports.ru.md#3-masque-outbound-connect-ip--warp)) — complete parameter
+**📖 [Full reference →](protocols-transports.md#3-masque-outbound-connect-ip--warp)**
+([RU](protocols-transports.ru.md#3-masque-outbound-connect-ip--warp)) — complete parameter
 table, profile matrix, key-material format, start-time validation and common footguns.
 
 ---
@@ -763,7 +839,7 @@ The added `CommandClient` methods:
   `disabled` is set by `SetEndpointEnabled` (SPEC 106, below;
   see [lx-energy.md §12](lx-energy.md#12-manual-onoff-switch-spec-106)).
 - **`GetPool(groupTag)`** — read a `urltest` group's current round_robin rotation pool, slot
-  by slot (SPEC 019; see [§3](#3-round_robin-load-balancing-spec-019)).
+  by slot (SPEC 019; see [§3](#3-urltest-node-selection-modes-spec-019--116)).
 - **`GetDNSGroups()`** — the live state of every DNS `group` server (SPEC 035; see
   [§5](#5-dns-server-group-spec-033035)): per member `clean` / `liveErrors` /
   `lastErrorAgeMs` / `liveWins` / `current`.
