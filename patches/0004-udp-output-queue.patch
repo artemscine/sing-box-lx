@@ -29,16 +29,15 @@ container (512 MB) ended it.
 ---
  common/listener/listener.go          |   2 +-
  common/listener/listener_udp.go      |  11 +++
- common/listener/listener_udp_test.go | 127 +++++++++++++++++++++++++++
+ common/listener/listener_udp_test.go | 127 +++++++++++++++++++++++++++++++++++
  3 files changed, 139 insertions(+), 1 deletion(-)
- create mode 100644 common/listener/listener_udp_test.go
 
 diff --git a/common/listener/listener.go b/common/listener/listener.go
-index 7a58015c8..b739b3480 100644
+index 2cbbbab51..40d9d0271 100644
 --- a/common/listener/listener.go
 +++ b/common/listener/listener.go
 @@ -92,7 +92,7 @@ func (l *Listener) Start() error {
- 			return err
+ 			return E.Errors(err, l.Close())
  		}
  		l.packetOutboundClosed = make(chan struct{})
 -		l.packetOutbound = make(chan *N.PacketBuffer, 64)
@@ -47,7 +46,7 @@ index 7a58015c8..b739b3480 100644
  		if !l.disablePacketOutput {
  			go l.loopUDPOut()
 diff --git a/common/listener/listener_udp.go b/common/listener/listener_udp.go
-index fab87cbc8..9292de3f5 100644
+index 697ef34d1..b3d5c35a5 100644
 --- a/common/listener/listener_udp.go
 +++ b/common/listener/listener_udp.go
 @@ -21,6 +21,17 @@ import (
@@ -201,6 +200,3 @@ index 000000000..d0e60f662
 +		t.Fatal("the reading loop did not stop")
 +	}
 +}
--- 
-2.53.0
-
