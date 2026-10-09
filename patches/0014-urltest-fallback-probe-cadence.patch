@@ -1,0 +1,40 @@
+Subject: [PATCH] urltest: probe priority members on every periodic tick
+
+Apply podkop-engine's every-interval intent (patch 0021 for 1.14) only to
+ordered-fallback groups. A probe finishing just after one tick must not cause
+the next tick to reuse history and double the recovery-check interval.
+Groups without fallbacks retain lx's existing history cache behaviour.
+
+---
+diff --git a/protocol/group/urltest.go b/protocol/group/urltest.go
+index bc0af82dc..f8c6ecdd8 100644
+--- a/protocol/group/urltest.go
++++ b/protocol/group/urltest.go
+@@ -632,7 +632,8 @@ func (g *URLTestGroup) urlTest(ctx context.Context, force bool) (map[string]uint
+ 	if g.failover && !force {
+ 		return g.failoverCheck(ctx), nil
+ 	}
+-	result := g.testNodes(ctx, g.outbounds, force)
++	// lx: Podkop profile — priority recovery needs a real probe on every tick.
++	result := g.testNodes(ctx, g.outbounds, force || g.hasFallbacks())
+ 	if g.balancer != nil {
+ 		// force path (manual URLTest tested all nodes): rebuild the pool from fresh results.
+ 		g.rebuildPool()
+diff --git a/protocol/group/urltest_fallback_lx_test.go b/protocol/group/urltest_fallback_lx_test.go
+index 640fedf57..2215877e7 100644
+--- a/protocol/group/urltest_fallback_lx_test.go
++++ b/protocol/group/urltest_fallback_lx_test.go
+@@ -83,3 +83,13 @@ func TestFallbackProbesAllMembers(t *testing.T) {
+ 		assertDials(t, node, 1)
+ 	}
+ }
++
++func TestFallbackPeriodicProbeDoesNotSkipFreshHistory(t *testing.T) {
++	g, nodes := fallbackFixture(t)
++	if _, err := g.urlTest(context.Background(), false); err != nil {
++		t.Fatal(err)
++	}
++	for _, node := range nodes {
++		assertDials(t, node, 1)
++	}
++}
